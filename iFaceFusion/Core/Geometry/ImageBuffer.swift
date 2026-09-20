@@ -123,8 +123,8 @@ public final class ImageBuffer: @unchecked Sendable {
             let rowOffset = cy * cropWidth * 4
             for cx in 0..<cropWidth {
                 let p = inv.transformPoint(SIMD2<Float>(Float(cx) + 0.5, Float(cy) + 0.5))
-                let sx = p.x - 0.5
-                let sy = p.y - 0.5
+                let sx = min(max(p.x - 0.5, 0), Float(width - 1))
+                let sy = min(max(p.y - 0.5, 0), Float(height - 1))
 
                 let x0 = max(0, min(width - 1, Int(floor(sx))))
                 let y0 = max(0, min(height - 1, Int(floor(sy))))

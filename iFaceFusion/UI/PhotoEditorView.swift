@@ -49,6 +49,7 @@ public struct PhotoEditorView: View {
                             .contentShape(Rectangle())
                     }
                     .accessibilityLabel("About and Licenses")
+                    .disabled(viewModel.isProcessing)
                 }
 
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -61,6 +62,7 @@ public struct PhotoEditorView: View {
                             .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Advanced Settings")
+                    .disabled(viewModel.isProcessing)
                 }
             }
             .sheet(isPresented: $viewModel.showAdvancedSheet) {
@@ -115,6 +117,7 @@ public struct PhotoEditorView: View {
             }
             .pickerStyle(.segmented)
             .accessibilityLabel("Before and After Comparison")
+            .disabled(viewModel.isProcessing)
 
             // Image Display
             ZStack {
@@ -153,6 +156,7 @@ public struct PhotoEditorView: View {
                         .cornerRadius(10)
                 }
                 .accessibilityHint("Saves full resolution PNG to your Photos library")
+                .disabled(viewModel.isProcessing)
 
                 if let shareURL = viewModel.tempShareURL {
                     ShareLink(item: shareURL) {
@@ -165,6 +169,7 @@ public struct PhotoEditorView: View {
                             .cornerRadius(10)
                     }
                     .accessibilityHint("Opens share sheet for processed full-resolution PNG")
+                    .disabled(viewModel.isProcessing)
                 } else {
                     Button {} label: {
                         Label("Share", systemImage: "square.and.arrow.up")
@@ -202,6 +207,7 @@ public struct PhotoEditorView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Select Source Face Photo")
+                .disabled(viewModel.isProcessing)
             }
 
             // Target Card (Always required)
@@ -216,6 +222,7 @@ public struct PhotoEditorView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Select Target Canvas Photo")
+            .disabled(viewModel.isProcessing)
         }
     }
 
@@ -372,6 +379,7 @@ public struct PhotoEditorView: View {
                             .foregroundColor(.purple)
                             .cornerRadius(8)
                     }
+                    .disabled(viewModel.isProcessing)
                 }
                 .padding(8)
                 .background(Color(uiColor: .secondarySystemBackground))
@@ -411,6 +419,7 @@ public struct PhotoEditorView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("\(title), \(isSelected ? "selected" : "not selected")")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .disabled(viewModel.isProcessing)
     }
 
     // MARK: - Safe Area Process CTA
@@ -438,11 +447,12 @@ public struct PhotoEditorView: View {
                     Button(role: .cancel) {
                         viewModel.cancelProcessing()
                     } label: {
-                        Text("Cancel Processing")
+                        Text(viewModel.progressMessage == "Cancelling..." ? "Cancelling..." : "Cancel Processing")
                             .font(.footnote)
                             .foregroundColor(.red)
                             .frame(minHeight: 36)
                     }
+                    .disabled(viewModel.progressMessage == "Cancelling...")
                 }
                 .padding(12)
                 .background(Color(uiColor: .systemBackground))
@@ -465,7 +475,7 @@ public struct PhotoEditorView: View {
                     .foregroundColor(.white)
                     .cornerRadius(14)
                 }
-                .disabled(!viewModel.canProcess)
+                .disabled(!viewModel.canProcess || viewModel.isProcessing)
                 .accessibilityLabel("Process Photo")
                 .accessibilityHint(viewModel.canProcess ? "Executes selected processors on target photo" : "Select required photos to enable processing")
             }

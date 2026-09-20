@@ -225,13 +225,13 @@ public struct FaceMask: Sendable {
         let scaleY = Float(height) / Float(targetH)
 
         for ty in 0..<targetH {
-            let srcY = (Float(ty) + 0.5) * scaleY - 0.5
+            let srcY = min(max((Float(ty) + 0.5) * scaleY - 0.5, 0), Float(height - 1))
             let y0 = max(0, min(height - 1, Int(floor(srcY))))
             let y1 = max(0, min(height - 1, y0 + 1))
             let fy = srcY - Float(y0)
 
             for tx in 0..<targetW {
-                let srcX = (Float(tx) + 0.5) * scaleX - 0.5
+                let srcX = min(max((Float(tx) + 0.5) * scaleX - 0.5, 0), Float(width - 1))
                 let x0 = max(0, min(width - 1, Int(floor(srcX))))
                 let x1 = max(0, min(width - 1, x0 + 1))
                 let fx = srcX - Float(x0)

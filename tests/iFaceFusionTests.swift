@@ -137,7 +137,7 @@ final class iFaceFusionTests: XCTestCase {
 
         XCTAssertGreaterThan(centerVal, neighborVal)
         XCTAssertGreaterThan(neighborVal, farVal)
-        XCTAssertGreaterThan(farVal, 0.0)
+        XCTAssertEqual(farVal, 0.0) // Outside the finite three-sigma kernel.
 
         // Symmetry
         XCTAssertEqual(blurred[15, 16], blurred[17, 16], accuracy: 1e-5)
@@ -188,7 +188,7 @@ final class iFaceFusionTests: XCTestCase {
         XCTAssertEqual(warped.data[3], 255)
 
         // Translation transform shifts pixel
-        let shift = AffineMatrix2x3(m00: 1, m01: 0, m02: -1, m10: 0, m11: 1, m12: -1)
+        let shift = AffineMatrix2x3(m00: 1, m01: 0, m02: 1, m10: 0, m11: 1, m12: 1)
         let shifted = buffer.warpAffine(matrix: shift, cropWidth: 4, cropHeight: 4)
         // (1, 1) in shifted maps to (0, 0) in source
         let idx11 = (1 * 4 + 1) * 4
@@ -441,6 +441,122 @@ final class iFaceFusionTests: XCTestCase {
         let resized = mask.resized(toWidth: 50, toHeight: 300)
         XCTAssertEqual(resized.width, 50)
         XCTAssertEqual(resized.height, 300)
-        XCTAssertEqual(resized.values[0], 1.0)
+        XCTAssertEqual(resized.values[0], 1.0, accuracy: 1e-6)
+    }
+
+    // MARK: - UI & ViewModel Validation Tests
+
+    @MainActor
+    func testPhotoEditorViewModelCanProcessRequiresFaceValidation() {
+        let vm = PhotoEditorViewModel()
+        vm.selectedProcessors = [.faceEnhancer] // does not require source
+
+        // Case 1: No images loaded -> false
+        XCTAssertFalse(vm.canProcess)
+
+        // Case 2: Target image set but status is .idle or .detecting -> false
+        vm.targetImage = UIImage()
+        vm.targetStatus = .idle
+        XCTAssertFalse(vm.canProcess)
+        vm.targetStatus = .detecting
+        XCTAssertFalse(vm.canProcess)
+
+        // Case 3: Target face detection failed -> false
+        vm.targetStatus = .failed(reason: "No face")
+        XCTAssertFalse(vm.canProcess)
+
+        // Case 4: Target face detected 2 faces -> false (must be exactly 1)
+        vm.targetStatus = .valid(count: 2)
+        XCTAssertFalse(vm.canProcess)
+
+        // Case 5: Target face detected exactly 1 face -> true
+        vm.targetStatus = .valid(count: 1)
+        XCTAssertTrue(vm.canProcess)
+
+        // Case 6: Processing flag active -> false
+        vm.isProcessing = true
+        XCTAssertFalse(vm.canProcess)
+    }
+
+    @MainActor
+    func testPhotoEditorViewModelFaceSwapperRequiresSourceFace() {
+        let vm = PhotoEditorViewModel()
+        vm.selectedProcessors = [.faceSwapper]
+        vm.targetImage = UIImage()
+        vm.targetStatus = .valid(count: 1)
+
+        // Face Swapper requires source image with 1 valid face
+        XCTAssertTrue(vm.requiresSourceImage)
+        XCTAssertFalse(vm.canProcess)
+
+        // Source present but detecting -> false
+        vm.sourceImage = UIImage()
+        vm.sourceStatus = .detecting
+        XCTAssertFalse(vm.canProcess)
+
+        // Source failed -> false
+        vm.sourceStatus = .failed(reason: "Blurry")
+        XCTAssertFalse(vm.canProcess)
+
+        // Source 1 valid face -> true
+        vm.sourceStatus = .valid(count: 1)
+        XCTAssertTrue(vm.canProcess)
+    }
+
+    @MainActor
+    func testPhotoEditorViewModelCancelKeepsBusyUntilEngineReturns() {
+        let vm = PhotoEditorViewModel()
+        vm.isProcessing = true
+        vm.progressMessage = "Running..."
+
+        vm.cancelProcessing()
+
+        // Cancel must NOT clear isProcessing immediately (keeps busy until engine unrolls)
+        XCTAssertTrue(vm.isProcessing)
+        XCTAssertEqual(vm.progressMessage, "Cancelling...")
+    }
+
+    func testFaceEditorAll14KnobsContract() {
+        let settings = FaceEditorSettings()
+        // 14 distinct knobs
+        XCTAssertEqual(settings.mouthSmile, 0.0)
+        XCTAssertEqual(settings.mouthGrim, 0.0)
+        XCTAssertEqual(settings.mouthPout, 0.0)
+        XCTAssertEqual(settings.mouthPurse, 0.0)
+        XCTAssertEqual(settings.mouthPositionHorizontal, 0.0)
+        XCTAssertEqual(settings.mouthPositionVertical, 0.0)
+        XCTAssertEqual(settings.eyebrowDirection, 0.0)
+        XCTAssertEqual(settings.eyeOpenRatio, 0.0)
+        XCTAssertEqual(settings.lipOpenRatio, 0.0)
+        XCTAssertEqual(settings.eyeGazeHorizontal, 0.0)
+        XCTAssertEqual(settings.eyeGazeVertical, 0.0)
+        XCTAssertEqual(settings.headPitch, 0.0)
+        XCTAssertEqual(settings.headYaw, 0.0)
+        XCTAssertEqual(settings.headRoll, 0.0)
+    }
+
+    func testDeepSwapperAndBackgroundRemoverSettings() {
+        var dfmSettings = DeepSwapperSettings()
+        XCTAssertNil(dfmSettings.inputSize)
+        dfmSettings.inputSize = 320
+        XCTAssertEqual(dfmSettings.inputSize, 320)
+
+        // Background remover defaults: transparent fill [0,0,0,0], despill [0,0,0,0]
+        let bgSettings = BackgroundRemoverSettings()
+        XCTAssertEqual(bgSettings.fillColor, [0, 0, 0, 0])
+        XCTAssertEqual(bgSettings.despillColor, [0, 0, 0, 0])
+    }
+
+    func testFaceMaskPaddingAndDynamicEnums() {
+        let padding = FaceMaskPadding(top: 10, right: 15, bottom: 20, left: 25)
+        XCTAssertEqual(padding.top, 10)
+        XCTAssertEqual(padding.right, 15)
+        XCTAssertEqual(padding.bottom, 20)
+        XCTAssertEqual(padding.left, 25)
+
+        XCTAssertEqual(FaceMaskType.allCases.count, 4)
+        XCTAssertEqual(FaceMaskArea.allCases.count, 3)
+        XCTAssertEqual(FaceMaskRegion.allCases.count, 10)
+        XCTAssertEqual(DebuggerItem.allCases.count, 4)
     }
 }

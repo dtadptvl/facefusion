@@ -12,6 +12,11 @@ public enum FaceStatus: Equatable, Sendable {
         return false
     }
 
+    public var isValidSingleFace: Bool {
+        if case .valid(let count) = self { return count == 1 }
+        return false
+    }
+
     public var statusDescription: String {
         switch self {
         case .idle:
