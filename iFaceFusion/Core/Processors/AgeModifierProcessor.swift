@@ -36,7 +36,7 @@ public final class AgeModifierProcessor: Sendable {
         let inputTensor = cropBuffer.toFloatTensorNCHW(mean: metadata.mean, std: metadata.std, isBGR: metadata.isBGR)
         let inputs: [String: TensorBuffer] = [
             "target": TensorBuffer(floatData: inputTensor, shape: [1, 3, cropH, cropW]),
-            "direction": TensorBuffer(floatData: directionVector, shape: [1, 2])
+            "direction": TensorBuffer(floatData: directionVector, shape: [2])
         ]
 
         let outputs = try await ortBridge.run(modelPath: modelURL.path, inputs: inputs)

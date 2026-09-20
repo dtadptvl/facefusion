@@ -153,7 +153,13 @@ public actor ORTBridge {
             ortEnv = newEnv
         }
 
-        if useCoreML && ORTIsCoreMLExecutionProviderAvailable() {
+        // Simulator CoreML repeatedly rejects dynamic graph partitions; validate CPU there.
+        #if targetEnvironment(simulator)
+        let coreMLAvailable = false
+        #else
+        let coreMLAvailable = ORTIsCoreMLExecutionProviderAvailable()
+        #endif
+        if useCoreML && coreMLAvailable {
             do {
                 let sessionOptions = try ORTSessionOptions()
                 try sessionOptions.setIntraOpNumThreads(2)
@@ -187,7 +193,7 @@ public actor ORTBridge {
 
         var ortInputs: [String: ORTValue] = [:]
         for (name, tensor) in inputs {
-            guard !tensor.shape.isEmpty, tensor.shape.allSatisfy({ $0 > 0 }) else {
+            guard tensor.shape.allSatisfy({ $0 > 0 }) else {
                 throw ORTBridgeError.invalidInput("Invalid shape \(tensor.shape) for tensor \(name)")
             }
             let expectedElements = tensor.shape.reduce(1, *)
@@ -255,7 +261,7 @@ public actor ORTBridge {
         for (outName, outVal) in ortOutputs {
             let info = try outVal.tensorTypeAndShapeInfo()
             let shape = info.shape.map { $0.intValue }
-            guard !shape.isEmpty, shape.allSatisfy({ $0 >= 0 }) else {
+            guard shape.allSatisfy({ $0 > 0 }) else {
                 throw ORTBridgeError.invalidOutput("Negative or invalid shape \(shape) for \(outName)")
             }
             let totalElements = shape.reduce(1, *)

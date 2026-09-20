@@ -50,6 +50,7 @@ jobs:
             -destination "platform=iOS Simulator,name=$SIM_NAME" \
             -only-testing:iFaceFusionTests/iFaceFusionTests \
             -only-testing:iFaceFusionTests/FaceGeometryTests \
+            -only-testing:iFaceFusionTests/ColorizerTests \
             -clonedSourcePackagesDirPath .spm \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
