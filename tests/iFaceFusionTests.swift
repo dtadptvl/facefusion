@@ -162,5 +162,14 @@ final class iFaceFusionTests: XCTestCase {
         XCTAssertNotNil(ModelCatalog.model(for: "arcface_w600k_r50"))
         XCTAssertNotNil(ModelCatalog.model(for: "gfpgan_1.4"))
         XCTAssertNotNil(ModelCatalog.model(for: "span_kendata_x4"))
+        XCTAssertNotNil(ModelCatalog.model(for: "real_esrgan_x4"))
+
+        // Verify verified upstream checksums
+        XCTAssertEqual(ModelCatalog.realEsrganX4.expectedCRC32, "9d6e76c4")
+        XCTAssertEqual(ModelCatalog.codeformer.expectedCRC32, "1456f3ab")
+
+        // Verify speculative/unsupported models are removed from catalog
+        XCTAssertNil(ModelCatalog.model(for: "inswapper_128"))
+        XCTAssertNil(ModelCatalog.model(for: "codeformer"))
     }
 }

@@ -1,8 +1,5 @@
 import Foundation
-
-#if canImport(onnxruntime_objc)
 import onnxruntime_objc
-#endif
 
 public enum ORTBridgeError: LocalizedError {
     case runtimeUnavailable
@@ -32,6 +29,8 @@ public struct TensorBuffer: Sendable {
     public enum DataType: Sendable {
         case float32
         case int64
+        case int32
+        case uint8
         case double
     }
 
@@ -39,6 +38,8 @@ public struct TensorBuffer: Sendable {
     public var dataType: DataType
     public var floatData: [Float]?
     public var int64Data: [Int64]?
+    public var int32Data: [Int32]?
+    public var uint8Data: [UInt8]?
     public var doubleData: [Double]?
 
     public init(floatData: [Float], shape: [Int]) {
@@ -46,6 +47,8 @@ public struct TensorBuffer: Sendable {
         self.dataType = .float32
         self.floatData = floatData
         self.int64Data = nil
+        self.int32Data = nil
+        self.uint8Data = nil
         self.doubleData = nil
     }
 
@@ -54,6 +57,28 @@ public struct TensorBuffer: Sendable {
         self.dataType = .int64
         self.floatData = nil
         self.int64Data = int64Data
+        self.int32Data = nil
+        self.uint8Data = nil
+        self.doubleData = nil
+    }
+
+    public init(int32Data: [Int32], shape: [Int]) {
+        self.shape = shape
+        self.dataType = .int32
+        self.floatData = nil
+        self.int64Data = nil
+        self.int32Data = int32Data
+        self.uint8Data = nil
+        self.doubleData = nil
+    }
+
+    public init(uint8Data: [UInt8], shape: [Int]) {
+        self.shape = shape
+        self.dataType = .uint8
+        self.floatData = nil
+        self.int64Data = nil
+        self.int32Data = nil
+        self.uint8Data = uint8Data
         self.doubleData = nil
     }
 
@@ -62,6 +87,8 @@ public struct TensorBuffer: Sendable {
         self.dataType = .double
         self.floatData = nil
         self.int64Data = nil
+        self.int32Data = nil
+        self.uint8Data = nil
         self.doubleData = doubleData
     }
 }
@@ -72,69 +99,73 @@ public actor ORTBridge {
     public static let shared = ORTBridge()
 
     private var currentModelPath: String?
-    #if canImport(onnxruntime_objc)
+    private var currentUseCoreML: Bool?
     private var env: ORTEnv?
     private var activeSession: ORTSession?
-    #endif
 
     public init() {
-        #if canImport(onnxruntime_objc)
         self.env = try? ORTEnv(loggingLevel: .warning)
-        #endif
     }
 
     /// Releases any currently allocated session and frees working memory.
     public func releaseSession() {
-        #if canImport(onnxruntime_objc)
         self.activeSession = nil
         self.currentModelPath = nil
-        #endif
+        self.currentUseCoreML = nil
     }
 
     /// Prepares or reuses an ORTSession for the model at modelPath.
-    private func getOrCreateSession(modelPath: String, useCoreML: Bool = true) throws -> Any? {
-        #if canImport(onnxruntime_objc)
-        if let current = activeSession, currentModelPath == modelPath {
+    private func getOrCreateSession(modelPath: String, useCoreML: Bool = true) throws -> ORTSession {
+        if let current = activeSession, currentModelPath == modelPath, currentUseCoreML == useCoreML {
             return current
         }
 
         activeSession = nil
         currentModelPath = nil
+        currentUseCoreML = nil
 
-        guard let ortEnv = self.env ?? (try? ORTEnv(loggingLevel: .warning)) else {
-            throw ORTBridgeError.runtimeUnavailable
-        }
-        self.env = ortEnv
+        let session = try createSession(modelPath: modelPath, useCoreML: useCoreML)
+        self.activeSession = session
+        self.currentModelPath = modelPath
+        self.currentUseCoreML = useCoreML
+        return session
+    }
 
-        let sessionOptions = try ORTSessionOptions()
-        try sessionOptions.setIntraOpNumThreads(2)
-        try sessionOptions.setGraphOptimizationLevel(.all)
-
-        if useCoreML {
-            // Attempt appending CoreML execution provider where supported
-            _ = try? sessionOptions.appendExecutionProvider("coreml", providerOptions: [
-                "MLComputeUnits": "CPUAndGPU",
-                "ModelFormat": "MLProgram"
-            ])
+    private func createSession(modelPath: String, useCoreML: Bool) throws -> ORTSession {
+        guard FileManager.default.fileExists(atPath: modelPath) else {
+            throw ORTBridgeError.sessionCreationFailed("Model file does not exist at path: \(modelPath)")
         }
 
-        do {
-            let session = try ORTSession(env: ortEnv, modelPath: modelPath, sessionOptions: sessionOptions)
-            self.activeSession = session
-            self.currentModelPath = modelPath
-            return session
-        } catch {
-            // Fallback to pure CPU if CoreML initialization failed
-            let fallbackOptions = try ORTSessionOptions()
-            try fallbackOptions.setIntraOpNumThreads(2)
-            let cpuSession = try ORTSession(env: ortEnv, modelPath: modelPath, sessionOptions: fallbackOptions)
-            self.activeSession = cpuSession
-            self.currentModelPath = modelPath
-            return cpuSession
+        let ortEnv: ORTEnv
+        if let existing = self.env {
+            ortEnv = existing
+        } else {
+            let newEnv = try ORTEnv(loggingLevel: .warning)
+            self.env = newEnv
+            ortEnv = newEnv
         }
-        #else
-        throw ORTBridgeError.runtimeUnavailable
-        #endif
+
+        if useCoreML && ORTIsCoreMLExecutionProviderAvailable() {
+            do {
+                let sessionOptions = try ORTSessionOptions()
+                try sessionOptions.setIntraOpNumThreads(2)
+                try sessionOptions.setGraphOptimizationLevel(.all)
+                let coreMLOptions = ORTCoreMLExecutionProviderOptions()
+                coreMLOptions.useCPUAndGPU = true
+                coreMLOptions.createMLProgram = true
+                coreMLOptions.enableOnSubgraphs = true
+                try sessionOptions.appendCoreMLExecutionProvider(with: coreMLOptions)
+                return try ORTSession(env: ortEnv, modelPath: modelPath, sessionOptions: sessionOptions)
+            } catch {
+                // Fallback to pure CPU if CoreML initialization or session creation failed
+            }
+        }
+
+        // CPU Fallback
+        let cpuOptions = try ORTSessionOptions()
+        try cpuOptions.setIntraOpNumThreads(2)
+        try cpuOptions.setGraphOptimizationLevel(.all)
+        return try ORTSession(env: ortEnv, modelPath: modelPath, sessionOptions: cpuOptions)
     }
 
     /// Executes inference with pre-staged tensor inputs and returns output tensors by name.
@@ -144,34 +175,61 @@ public actor ORTBridge {
         outputNames: [String]? = nil,
         useCoreML: Bool = true
     ) throws -> [String: TensorBuffer] {
-        #if canImport(onnxruntime_objc)
-        guard let session = try getOrCreateSession(modelPath: modelPath, useCoreML: useCoreML) as? ORTSession else {
-            throw ORTBridgeError.sessionCreationFailed("Session could not be instantiated")
-        }
+        let session = try getOrCreateSession(modelPath: modelPath, useCoreML: useCoreML)
 
         var ortInputs: [String: ORTValue] = [:]
         for (name, tensor) in inputs {
+            guard !tensor.shape.isEmpty, tensor.shape.allSatisfy({ $0 > 0 }) else {
+                throw ORTBridgeError.invalidInput("Invalid shape \(tensor.shape) for tensor \(name)")
+            }
+            let expectedElements = tensor.shape.reduce(1, *)
             let shapeNumbers = tensor.shape.map { NSNumber(value: $0) }
+
             switch tensor.dataType {
             case .float32:
                 guard var data = tensor.floatData else { throw ORTBridgeError.invalidInput("Missing float data for \(name)") }
+                guard data.count == expectedElements else {
+                    throw ORTBridgeError.invalidInput("Float32 data count \(data.count) != shape elements \(expectedElements) for \(name)")
+                }
                 let length = data.count * MemoryLayout<Float>.stride
                 let nsData = NSMutableData(bytes: &data, length: length)
                 let ortVal = try ORTValue(tensorData: nsData, elementType: .float, shape: shapeNumbers)
                 ortInputs[name] = ortVal
+
             case .int64:
                 guard var data = tensor.int64Data else { throw ORTBridgeError.invalidInput("Missing int64 data for \(name)") }
+                guard data.count == expectedElements else {
+                    throw ORTBridgeError.invalidInput("Int64 data count \(data.count) != shape elements \(expectedElements) for \(name)")
+                }
                 let length = data.count * MemoryLayout<Int64>.stride
                 let nsData = NSMutableData(bytes: &data, length: length)
                 let ortVal = try ORTValue(tensorData: nsData, elementType: .int64, shape: shapeNumbers)
                 ortInputs[name] = ortVal
-            case .double:
-                guard var data = tensor.doubleData else { throw ORTBridgeError.invalidInput("Missing double data for \(name)") }
-                var floatData = data.map { Float($0) }
-                let length = floatData.count * MemoryLayout<Float>.stride
-                let nsData = NSMutableData(bytes: &floatData, length: length)
-                let ortVal = try ORTValue(tensorData: nsData, elementType: .float, shape: shapeNumbers)
+
+            case .int32:
+                guard var data = tensor.int32Data else { throw ORTBridgeError.invalidInput("Missing int32 data for \(name)") }
+                guard data.count == expectedElements else {
+                    throw ORTBridgeError.invalidInput("Int32 data count \(data.count) != shape elements \(expectedElements) for \(name)")
+                }
+                let length = data.count * MemoryLayout<Int32>.stride
+                let nsData = NSMutableData(bytes: &data, length: length)
+                let ortVal = try ORTValue(tensorData: nsData, elementType: .int32, shape: shapeNumbers)
                 ortInputs[name] = ortVal
+
+            case .uint8:
+                guard var data = tensor.uint8Data else { throw ORTBridgeError.invalidInput("Missing uint8 data for \(name)") }
+                guard data.count == expectedElements else {
+                    throw ORTBridgeError.invalidInput("UInt8 data count \(data.count) != shape elements \(expectedElements) for \(name)")
+                }
+                let length = data.count * MemoryLayout<UInt8>.stride
+                let nsData = NSMutableData(bytes: &data, length: length)
+                let ortVal = try ORTValue(tensorData: nsData, elementType: .uInt8, shape: shapeNumbers)
+                ortInputs[name] = ortVal
+
+            case .double:
+                // ONNX Runtime Objective-C does not support DOUBLE tensor element data type.
+                // Refuse silent cast to prevent unexpected tensor corruption.
+                throw ORTBridgeError.invalidInput("Double tensor data type is unsupported by ONNX Runtime Objective-C API for \(name); convert to float32 or use native C API")
             }
         }
 
@@ -189,23 +247,65 @@ public actor ORTBridge {
         for (outName, outVal) in ortOutputs {
             let info = try outVal.tensorTypeAndShapeInfo()
             let shape = info.shape.map { $0.intValue }
+            guard !shape.isEmpty, shape.allSatisfy({ $0 >= 0 }) else {
+                throw ORTBridgeError.invalidOutput("Negative or invalid shape \(shape) for \(outName)")
+            }
             let totalElements = shape.reduce(1, *)
 
             guard let tensorData = try? outVal.tensorData() else {
                 throw ORTBridgeError.invalidOutput("Could not read tensor data for \(outName)")
             }
 
-            var floatArray = [Float](repeating: 0, count: totalElements)
-            let copyBytes = min(tensorData.length, totalElements * MemoryLayout<Float>.stride)
-            _ = floatArray.withUnsafeMutableBytes { destBytes in
-                tensorData.getBytes(destBytes.baseAddress!, length: copyBytes)
+            switch info.elementType {
+            case .float:
+                let expectedBytes = totalElements * MemoryLayout<Float>.stride
+                guard tensorData.length == expectedBytes else {
+                    throw ORTBridgeError.invalidOutput("Output tensor byte count (\(tensorData.length)) != expected float bytes (\(expectedBytes)) for \(outName)")
+                }
+                var floatArray = [Float](repeating: 0, count: totalElements)
+                _ = floatArray.withUnsafeMutableBytes { destBytes in
+                    tensorData.getBytes(destBytes.baseAddress!, length: expectedBytes)
+                }
+                result[outName] = TensorBuffer(floatData: floatArray, shape: shape)
+
+            case .int64:
+                let expectedBytes = totalElements * MemoryLayout<Int64>.stride
+                guard tensorData.length == expectedBytes else {
+                    throw ORTBridgeError.invalidOutput("Output tensor byte count (\(tensorData.length)) != expected int64 bytes (\(expectedBytes)) for \(outName)")
+                }
+                var int64Array = [Int64](repeating: 0, count: totalElements)
+                _ = int64Array.withUnsafeMutableBytes { destBytes in
+                    tensorData.getBytes(destBytes.baseAddress!, length: expectedBytes)
+                }
+                result[outName] = TensorBuffer(int64Data: int64Array, shape: shape)
+
+            case .int32:
+                let expectedBytes = totalElements * MemoryLayout<Int32>.stride
+                guard tensorData.length == expectedBytes else {
+                    throw ORTBridgeError.invalidOutput("Output tensor byte count (\(tensorData.length)) != expected int32 bytes (\(expectedBytes)) for \(outName)")
+                }
+                var int32Array = [Int32](repeating: 0, count: totalElements)
+                _ = int32Array.withUnsafeMutableBytes { destBytes in
+                    tensorData.getBytes(destBytes.baseAddress!, length: expectedBytes)
+                }
+                result[outName] = TensorBuffer(int32Data: int32Array, shape: shape)
+
+            case .uInt8:
+                let expectedBytes = totalElements * MemoryLayout<UInt8>.stride
+                guard tensorData.length == expectedBytes else {
+                    throw ORTBridgeError.invalidOutput("Output tensor byte count (\(tensorData.length)) != expected uint8 bytes (\(expectedBytes)) for \(outName)")
+                }
+                var uint8Array = [UInt8](repeating: 0, count: totalElements)
+                _ = uint8Array.withUnsafeMutableBytes { destBytes in
+                    tensorData.getBytes(destBytes.baseAddress!, length: expectedBytes)
+                }
+                result[outName] = TensorBuffer(uint8Data: uint8Array, shape: shape)
+
+            default:
+                throw ORTBridgeError.invalidOutput("Unsupported output tensor element type (\(info.elementType.rawValue)) for \(outName)")
             }
-            result[outName] = TensorBuffer(floatData: floatArray, shape: shape)
         }
 
         return result
-        #else
-        throw ORTBridgeError.runtimeUnavailable
-        #endif
     }
 }

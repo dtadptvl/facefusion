@@ -2,10 +2,13 @@
 .prime
 build/
 .DS_Store
-models/
+/models/
 *.onnx
 *.dfm
 .build/
 *.xcodeproj
 DerivedData/
 .spm/
+__pycache__/
+*.ipa
+Payload/

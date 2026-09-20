@@ -140,4 +140,8 @@ if __name__ == "__main__":
     test_live_portrait_rotation()
     test_crc32_checksums()
     test_landmark_distance_ratio()
+    from test_model_catalog import test_model_catalog_contracts, test_ort_bridge_contracts, test_model_cache_contracts
+    test_model_catalog_contracts()
+    test_ort_bridge_contracts()
+    test_model_cache_contracts()
     print("\nALL TARGETED CHECKS PASSED.")
