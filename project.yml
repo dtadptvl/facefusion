@@ -1,0 +1,80 @@
+name: iFaceFusion
+
+options:
+  bundleIdPrefix: com.ifacefusion
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.0"
+
+packages:
+  onnxruntime:
+    url: https://github.com/microsoft/onnxruntime-swift-package-manager
+    exactVersion: 1.24.2
+
+targets:
+  iFaceFusion:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: iFaceFusion
+        excludes:
+          - "**/*.onnx"
+          - "**/*.dfm"
+    dependencies:
+      - package: onnxruntime
+        product: onnxruntime
+    settings:
+      base:
+        PRODUCT_NAME: iFaceFusion
+        PRODUCT_BUNDLE_IDENTIFIER: com.ifacefusion.app
+        INFOPLIST_KEY_CFBundleDisplayName: iFaceFusion
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "iFaceFusion saves processed high-resolution photos to your library."
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "iFaceFusion requires access to select photos for editing."
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.10"
+        ENABLE_TESTABILITY: YES
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: YES
+
+  iFaceFusionTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: tests/iFaceFusionTests.swift
+    dependencies:
+      - target: iFaceFusion
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ifacefusion.tests
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        SWIFT_VERSION: "5.10"
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  iFaceFusion:
+    build:
+      targets:
+        iFaceFusion: all
+        iFaceFusionTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - iFaceFusionTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

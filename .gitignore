@@ -1,0 +1,11 @@
+# Git ignore for iFaceFusion
+.prime
+build/
+.DS_Store
+models/
+*.onnx
+*.dfm
+.build/
+*.xcodeproj
+DerivedData/
+.spm/

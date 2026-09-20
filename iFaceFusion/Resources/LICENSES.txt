@@ -1,0 +1,188 @@
+================================================================================
+iFaceFusion Third-Party Attributions, Upstream Code, and Model Licenses
+================================================================================
+
+1. UPSTREAM CODEBASE ATTRIBUTION
+--------------------------------------------------------------------------------
+Project: FaceFusion
+Upstream Commit SHA: 358f169e95e2b02431722cc287db8acda6658df1
+Original Copyright: Copyright (c) 2026 Henry Ruhs
+License: OpenRAIL-AS (Open Responsible AI License - App-Specific / Software)
+
+OpenRAIL-AS License Summary & Use Restrictions:
+The upstream FaceFusion software and derivative works are governed by the
+OpenRAIL-AS license. Under this license:
+- You are free to use, reproduce, modify, and distribute this software subject
+  to the strict behavioral and ethical use restrictions below.
+- You must include a copy of this license and attribution in all copies or
+  substantial portions of the software.
+
+STRICT USE RESTRICTIONS:
+You agree not to use the software or derivative models:
+1. In any way that violates any applicable national, federal, state, local or
+   international law or regulation.
+2. For the purpose of exploiting, harming or attempting to exploit or harm minors
+   in any way.
+3. To generate or disseminate non-consensual sexual content, intimate imagery,
+   or sexually explicit depictions of individuals without their express consent.
+4. To generate or disseminate content intended to defame, harass, or deceive
+   individuals, or create deceptive representations (deepfakes) for malicious,
+   fraudulent, or electoral interference purposes.
+5. To impersonate any person or entity without explicit notice or disclosure
+   indicating that the content was generated or altered by AI.
+6. To generate or disseminate verifiably false information with the purpose
+   of harming others or inciting violence.
+
+--------------------------------------------------------------------------------
+2. ON-DEVICE RUNTIME DEPENDENCY
+--------------------------------------------------------------------------------
+Library: ONNX Runtime Swift Package Manager (onnxruntime 1.24.2)
+Vendor: Microsoft Corporation
+Repository: https://github.com/microsoft/onnxruntime-swift-package-manager
+License: MIT License
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+--------------------------------------------------------------------------------
+3. MODEL METADATA CATALOG & LICENSES
+--------------------------------------------------------------------------------
+The application utilizes open-weights deep learning models for face processing.
+In accordance with zero-bundle security and memory constraints, no model binaries
+are bundled within the application binary. Models are dynamically cached upon
+first use from authorized mirrors, verified against cryptographic checksums.
+
+Below is the transparent catalog of supported models, their authors, licenses,
+and official source repositories:
+
+A. HyperSwap 1a 256 (hyperswap_1a_256)
+   - Processor: Face Swapper
+   - Vendor: FaceFusion
+   - Year: 2025
+   - Input: 256x256 RGB
+   - License: ResearchRAIL (OpenRAIL for Research)
+   - CRC32: 79e50d4b
+   - Repository: https://github.com/facefusion/facefusion-assets
+
+B. InSwapper 128 (inswapper_128)
+   - Processor: Face Swapper
+   - Vendor: InsightFace (DeepInsight)
+   - Year: 2023
+   - Input: 128x128 RGB
+   - License: Non-Commercial (Strictly for academic & non-commercial evaluation)
+   - CRC32: 7057c6ea
+   - Repository: https://github.com/deepinsight/insightface
+
+C. GFPGAN 1.4 (gfpgan_1.4)
+   - Processor: Face Enhancer
+   - Vendor: TencentARC (Tencent Applied Research Center)
+   - Year: 2022
+   - Input: 512x512 RGB
+   - License: Apache-2.0
+   - CRC32: 5a6c6364
+   - Repository: https://github.com/TencentARC/GFPGAN
+
+D. CodeFormer (codeformer)
+   - Processor: Face Enhancer
+   - Vendor: Shangchen Zhou (sczhou / S-Lab, Nanyang Technological University)
+   - Year: 2022
+   - Input: 512x512 RGB
+   - License: S-Lab-1.0 (Non-Commercial Research License)
+   - CRC32: 1198e3b7
+   - Repository: https://github.com/sczhou/CodeFormer
+
+E. SPAN Kendata x4 (span_kendata_x4)
+   - Processor: Frame Enhancer (Upscaler)
+   - Vendor: kendata / FaceOnLive
+   - Year: 2024
+   - Input: Dynamic RGB (Scale: 4x)
+   - License: Apache-2.0
+   - CRC32: db5f1614
+   - Repository: https://github.com/FaceOnLive
+
+F. Real-ESRGAN x4 (real_esrgan_x4)
+   - Processor: Frame Enhancer (Upscaler)
+   - Vendor: Xintao Wang (xinntao / ARC Lab, Tencent PCG)
+   - Year: 2021
+   - Input: Dynamic RGB (Scale: 4x)
+   - License: BSD-3-Clause
+   - CRC32: de7db053
+   - Repository: https://github.com/xinntao/Real-ESRGAN
+
+G. DDColor (ddcolor)
+   - Processor: Frame Colorizer
+   - Vendor: DAMO Academy, Alibaba Group (piddnad)
+   - Year: 2023
+   - Input: 256x256 / 512x512 RGB
+   - License: Apache-2.0
+   - CRC32: 58a9ae63
+   - Repository: https://github.com/piddnad/DDColor
+
+H. MODNet (modnet)
+   - Processor: Background Remover
+   - Vendor: ZHKKKe (Zhang et al.)
+   - Year: 2021
+   - Input: 512x512 RGB
+   - License: Apache-2.0
+   - CRC32: a5430268
+   - Repository: https://github.com/ZHKKKe/MODNet
+
+I. FRAN (fran)
+   - Processor: Age Modifier
+   - Vendor: Disney Research
+   - Year: 2022
+   - Input: 512x512 RGB
+   - License: Non-Commercial (Disney Research License)
+   - CRC32: a49a71bd
+   - Reference: https://studios.disneyresearch.com/2022/11/30/production-ready-face-re-aging-for-visual-effects/
+
+J. LivePortrait Suite (live_portrait)
+   - Processors: Expression Restorer, Face Editor
+   - Modules: Feature Extractor, Motion Extractor, Generator, Eye Retargeter, Lip Retargeter, Stitcher
+   - Vendor: KwaiVGI (Kuaishou Technology)
+   - Year: 2024
+   - License: Apache-2.0 / MIT
+   - Checksums:
+     - Feature Extractor: CRC32 5057790b
+     - Motion Extractor: CRC32 46e6a100
+     - Generator: CRC32 ab1f50a4
+     - Eye Retargeter: CRC32 153093fc
+     - Lip Retargeter: CRC32 e673a5a7
+     - Stitcher: CRC32 dae7c844
+   - Repository: https://github.com/KwaiVGI/LivePortrait
+
+K. ArcFace W600K R50
+   - Function: Landmark & Identity Embedding Extractor
+   - Vendor: InsightFace
+   - Year: 2021
+   - License: Non-Commercial
+   - CRC32: c976e6d3
+   - Repository: https://github.com/deepinsight/insightface
+
+L. XSeg 1
+   - Function: Face Mask Segmentation
+   - Vendor: DeepFaceLab (iperov)
+   - Year: 2021
+   - License: GPL-3.0
+   - CRC32: f4fd92f2
+   - Repository: https://github.com/iperov/DeepFaceLab
+
+M. BiSeNet ResNet-18
+   - Function: Face Parsing (19 semantic classes)
+   - Vendor: yakhyo
+   - Year: 2024
+   - License: MIT
+   - CRC32: 6cafc877
+   - Repository: https://github.com/yakhyo/face-parsing
+
+================================================================================
+END OF LICENSES
+================================================================================

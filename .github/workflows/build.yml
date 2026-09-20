@@ -1,0 +1,106 @@
+name: Build & Test iFaceFusion
+
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build Unsigned IPA & Run Tests
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Select Xcode 16
+        run: |
+          if [ -d "/Applications/Xcode_16.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.app
+          elif [ -d "/Applications/Xcode_16.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.0.app
+          elif [ -d "/Applications/Xcode.app" ]; then
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      - name: Run Simulator Unit Tests
+        run: |
+          SIM_NAME=$(xcrun simctl list devices available | grep -m 1 -E "iPhone (16|15)" | sed -E 's/^[[:space:]]*([^(]+).*/\1/' | xargs)
+          if [ -z "$SIM_NAME" ]; then
+            SIM_NAME="iPhone 16"
+          fi
+          echo "Executing tests on simulator: $SIM_NAME"
+          xcodebuild test \
+            -project iFaceFusion.xcodeproj \
+            -scheme iFaceFusion \
+            -destination "platform=iOS Simulator,name=$SIM_NAME" \
+            -clonedSourcePackagesDirPath .spm \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Build Unsigned Application (arm64)
+        run: |
+          xcodebuild build \
+            -project iFaceFusion.xcodeproj \
+            -scheme iFaceFusion \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -clonedSourcePackagesDirPath .spm \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_SIGNATURE_OVERRIDE="" \
+            ARCHS=arm64 \
+            BUILD_DIR=build
+
+      - name: Package Unsigned IPA
+        run: |
+          mkdir -p Payload
+          APP_PATH=$(find build/Release-iphoneos -name "iFaceFusion.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: iFaceFusion.app not found in build/Release-iphoneos"
+            exit 1
+          fi
+          echo "Found app bundle at: $APP_PATH"
+          cp -R "$APP_PATH" Payload/
+          zip -r -y iFaceFusion-unsigned.ipa Payload
+
+      - name: Verify IPA Integrity and Invariants
+        run: |
+          echo "==> Verifying arm64 architecture..."
+          file Payload/iFaceFusion.app/iFaceFusion | grep "arm64" || (echo "Binary is not arm64" && exit 1)
+
+          echo "==> Verifying Info.plist exists..."
+          test -f Payload/iFaceFusion.app/Info.plist || (echo "Info.plist is missing" && exit 1)
+
+          echo "==> Verifying no embedded.mobileprovision..."
+          if [ -f Payload/iFaceFusion.app/embedded.mobileprovision ]; then
+            echo "Error: embedded.mobileprovision found in unsigned build"
+            exit 1
+          fi
+
+          echo "==> Verifying zero bundled models..."
+          MODEL_COUNT=$(find Payload/iFaceFusion.app -name "*.onnx" -o -name "*.dfm" | wc -l | tr -d ' ')
+          if [ "$MODEL_COUNT" -ne "0" ]; then
+            echo "Error: Found bundled models ($MODEL_COUNT files). Models must not be bundled!"
+            exit 1
+          fi
+
+          echo "All verification checks passed successfully."
+
+      - name: Upload Unsigned IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-iFaceFusion
+          path: iFaceFusion-unsigned.ipa
+          retention-days: 14
