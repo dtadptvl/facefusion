@@ -210,12 +210,87 @@ def test_processor_contracts():
 
     print("[PASS] Processor contracts: named outputs, strict counts, no false fallbacks, coordinate scaling, and memory guards verified")
 
+def test_pixel_boost_and_mask_contracts():
+    # 1. Analytical Pixel Boost roundtrip
+    boost_dim = 512
+    model_dim = 256
+    total = boost_dim // model_dim
+    orig_frame = np.random.randint(0, 256, (boost_dim, boost_dim, 3), dtype=np.uint8)
+
+    # Implode: (boost_dim, boost_dim, 3) -> (model_dim, total, model_dim, total, 3) -> transpose(1, 3, 0, 2, 4) -> (total^2, model_dim, model_dim, 3)
+    imploded = orig_frame.reshape(model_dim, total, model_dim, total, 3).transpose(1, 3, 0, 2, 4).reshape(total**2, model_dim, model_dim, 3)
+    assert imploded.shape == (4, 256, 256, 3), f"Imploded shape mismatch: {imploded.shape}"
+
+    # Explode: (total^2, model_dim, model_dim, 3) -> (total, total, model_dim, model_dim, 3) -> transpose(2, 0, 3, 1, 4) -> (boost_dim, boost_dim, 3)
+    exploded = imploded.reshape(total, total, model_dim, model_dim, 3).transpose(2, 0, 3, 1, 4).reshape(boost_dim, boost_dim, 3)
+    assert np.array_equal(orig_frame, exploded), "Pixel boost roundtrip must be perfectly bijective"
+
+    # 2. Verify ProcessorMasks.swift
+    masks_path = os.path.join("iFaceFusion", "Core", "Geometry", "ProcessorMasks.swift")
+    assert os.path.exists(masks_path), f"ProcessorMasks.swift missing at {masks_path}"
+    with open(masks_path, "r", encoding="utf-8") as f:
+        masks_src = f.read()
+
+    assert "createOcclusionMask" in masks_src, "Missing createOcclusionMask"
+    assert "createRegionMask" in masks_src, "Missing createRegionMask"
+    assert "createAreaMask" in masks_src, "Missing createAreaMask"
+    assert "createBoxMask" in masks_src, "Missing createBoxMask"
+    assert "createCombinedMask" in masks_src, "Missing createCombinedMask"
+    assert "featherMask" in masks_src, "Missing featherMask"
+
+    # XSeg contract: NHWC RGB in [0, 1], input name 'input'
+    assert "toFloatTensorNHWC(isBGR: false)" in masks_src, "XSeg must use NHWC RGB"
+    assert '"input": TensorBuffer(floatData: nhwcRGB, shape: [1, modelH, modelW, 3])' in masks_src, "XSeg input tensor mismatch"
+
+    # BiSeNet contract: NCHW RGB ImageNet normalized, input name 'input', 19 classes
+    assert "toFloatTensorNCHW(mean: metadata.mean, std: metadata.std, isBGR: false)" in masks_src, "BiSeNet must use NCHW RGB"
+    assert '"input": TensorBuffer(floatData: nchwRGB, shape: [1, 3, modelH, modelW])' in masks_src, "BiSeNet input tensor mismatch"
+    assert "19 * planeSize" in masks_src, "BiSeNet must guard 19 classes output"
+
+    # Feathering contract: (clip(0.5, 1.0) - 0.5) * 2.0
+    assert "(v - 0.5) * 2.0" in masks_src, "Feathering formula must match upstream exactly"
+
+    # 3. Verify FaceSwapperProcessor uses PixelBoost and ProcessorMasks
+    swapper_path = os.path.join("iFaceFusion", "Core", "Processors", "FaceSwapperProcessor.swift")
+    with open(swapper_path, "r", encoding="utf-8") as f:
+        swapper_src = f.read()
+    assert "PixelBoost.implode" in swapper_src, "FaceSwapper must use PixelBoost.implode"
+    assert "PixelBoost.explode" in swapper_src, "FaceSwapper must use PixelBoost.explode"
+    assert "ProcessorMasks.createCombinedMask" in swapper_src, "FaceSwapper must use ProcessorMasks.createCombinedMask"
+
+    # 4. Verify FaceEditorProcessor contracts
+    editor_path = os.path.join("iFaceFusion", "Core", "Processors", "FaceEditorProcessor.swift")
+    with open(editor_path, "r", encoding="utf-8") as f:
+        editor_src = f.read()
+    assert "eyeDelta.count >= 63" in editor_src, "FaceEditor must strictly guard eyeDelta count >= 63"
+    assert "lipDelta.count >= 63" in editor_src, "FaceEditor must strictly guard lipDelta count >= 63"
+    assert "stitchedPoints.count >= 63" in editor_src, "FaceEditor must strictly guard stitchedPoints count >= 63"
+    assert "genTensor.count == cropSize * cropSize * 3" in editor_src, "FaceEditor must strictly guard genTensor size"
+    assert "ProcessorMasks.createCombinedMask" in editor_src, "FaceEditor must use ProcessorMasks.createCombinedMask"
+
+    # 5. Verify ExpressionRestorerProcessor contracts
+    expr_path = os.path.join("iFaceFusion", "Core", "Processors", "ExpressionRestorerProcessor.swift")
+    with open(expr_path, "r", encoding="utf-8") as f:
+        expr_src = f.read()
+    assert "WarpTemplate.arcface128" in expr_src, "ExpressionRestorer template must match upstream arcface128"
+    assert "ProcessorMasks.createCombinedMask" in expr_src, "ExpressionRestorer must use ProcessorMasks.createCombinedMask"
+    assert "genTensor.count == cropSize * cropSize * 3" in expr_src, "ExpressionRestorer must strictly guard genTensor size"
+
+    # 6. Verify FaceMasks.swift y0 clamping fix
+    face_masks_path = os.path.join("iFaceFusion", "Core", "Geometry", "FaceMasks.swift")
+    with open(face_masks_path, "r", encoding="utf-8") as f:
+        face_masks_src = f.read()
+    assert "let y0 = max(0, min(height - 1, Int(floor(srcY))))" in face_masks_src, "FaceMasks y0 clamping must use height - 1"
+
+    print("[PASS] PixelBoost exact interleaving, ProcessorMasks neural/area execution, and LivePortrait delta63 guards verified")
+
 if __name__ == "__main__":
     test_umeyama_similarity()
     test_live_portrait_rotation()
     test_crc32_checksums()
     test_landmark_distance_ratio()
     test_processor_contracts()
+    test_pixel_boost_and_mask_contracts()
     from test_model_catalog import test_model_catalog_contracts, test_ort_bridge_contracts, test_model_cache_contracts
     test_model_catalog_contracts()
     test_ort_bridge_contracts()

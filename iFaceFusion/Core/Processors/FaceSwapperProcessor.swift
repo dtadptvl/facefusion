@@ -44,58 +44,79 @@ public final class FaceSwapperProcessor: Sendable {
         }
         let swapperURL = try await modelCache.ensureModelDownloaded(swapperMetadata)
 
-        // 5. Warp target face into swapper template coordinate space
+        // 5. Warp target face into swapper template coordinate space with pixel boost support
         let template = swapperMetadata.template ?? .arcface128
         let cropW = swapperMetadata.inputWidth
         let cropH = swapperMetadata.inputHeight
-        let dstTemplatePoints = template.targetPoints(width: Float(cropW), height: Float(cropH))
+
+        let boostDim = PixelBoost.parseBoostDimension(settings.pixelBoost, fallback: cropW)
+        let total = max(1, boostDim / cropW)
+        let boostW = cropW * total
+        let boostH = cropH * total
+
+        let dstTemplatePoints = template.targetPoints(width: Float(boostW), height: Float(boostH))
         let affineMatrix = ImageGeometry.estimateSimilarityMatrix(src: targetFace.landmark5.points, dst: dstTemplatePoints)
 
-        let cropBuffer = targetImage.warpAffine(matrix: affineMatrix, cropWidth: cropW, cropHeight: cropH)
+        let cropBuffer = targetImage.warpAffine(matrix: affineMatrix, cropWidth: boostW, cropHeight: boostH)
 
-        // 6. Generate masks
-        var masks: [FaceMask] = []
-        if maskSettings.types.contains(.box) {
-            let boxMask = FaceMask.createBoxMask(width: cropW, height: cropH, blur: maskSettings.blur, padding: maskSettings.padding)
-            masks.append(boxMask)
-        }
-        if maskSettings.types.contains(.area) {
-            let warped68 = targetFace.landmark68.points.map { affineMatrix.transformPoint($0) }
-            let areaMask = FaceMask.createAreaMask(width: cropW, height: cropH, landmarks68InCrop: warped68, areas: maskSettings.areas)
-            masks.append(areaMask)
-        }
-
-        // 7. Blend embedding using weight matching upstream: interp(weight, [0, 1], [0.35, -0.35])
+        // 6. Blend embedding using weight matching upstream: interp(weight, [0, 1], [0.35, -0.35])
         let w = LivePortraitGeometry.interp(x: settings.weight, xp0: 0, xp1: 1, fp0: 0.35, fp1: -0.35)
         var blendedEmbedding = [Float](repeating: 0, count: 512)
         for i in 0..<512 {
             blendedEmbedding[i] = sourceEmbedding[i] * (1.0 - w) + targetEmbedding[i] * w
         }
 
-        // 8. Prepare inputs and execute ONNX inference
-        let cropTensor = cropBuffer.toFloatTensorNCHW(mean: swapperMetadata.mean, std: swapperMetadata.std, isBGR: swapperMetadata.isBGR)
-        let inputs: [String: TensorBuffer] = [
-            "source": TensorBuffer(floatData: blendedEmbedding, shape: [1, 512]),
-            "target": TensorBuffer(floatData: cropTensor, shape: [1, 3, cropH, cropW])
-        ]
+        // 7. Implode high-resolution crop into interleaved sub-frames of model size
+        let subFrames = PixelBoost.implode(crop: cropBuffer, total: total, modelWidth: cropW, modelHeight: cropH)
+        var swappedSubFrames = [ImageBuffer]()
+        swappedSubFrames.reserveCapacity(subFrames.count)
 
-        let outputs = try await ortBridge.run(modelPath: swapperURL.path, inputs: inputs)
-        // HyperSwap produces "output" AND "mask"; strictly use "output" name to avoid picking mask
-        guard let swappedTensor = (outputs["output"] ?? (outputs.count == 1 ? outputs.values.first : nil))?.floatData else {
-            throw ORTBridgeError.inferenceFailed("Swapper returned empty output tensor")
+        // 8. Execute ONNX inference per sub-frame
+        for subFrame in subFrames {
+            let subTensor = subFrame.toFloatTensorNCHW(mean: swapperMetadata.mean, std: swapperMetadata.std, isBGR: swapperMetadata.isBGR)
+            let inputs: [String: TensorBuffer] = [
+                "source": TensorBuffer(floatData: blendedEmbedding, shape: [1, 512]),
+                "target": TensorBuffer(floatData: subTensor, shape: [1, 3, cropH, cropW])
+            ]
+
+            let outputs = try await ortBridge.run(modelPath: swapperURL.path, inputs: inputs)
+            // HyperSwap produces "output" AND "mask"; strictly use "output" name to avoid picking mask
+            guard let swappedTensor = (outputs["output"] ?? (outputs.count == 1 ? outputs.values.first : nil))?.floatData else {
+                throw ORTBridgeError.inferenceFailed("Swapper returned empty output tensor")
+            }
+
+            let swappedSub = ImageBuffer.fromFloatTensorNCHW(
+                tensor: swappedTensor,
+                width: cropW,
+                height: cropH,
+                mean: swapperMetadata.mean,
+                std: swapperMetadata.std,
+                isBGR: swapperMetadata.isBGR
+            )
+            swappedSubFrames.append(swappedSub)
         }
 
-        // 9. Normalize crop frame and paste back into target buffer
-        let swappedCrop = ImageBuffer.fromFloatTensorNCHW(
-            tensor: swappedTensor,
-            width: cropW,
-            height: cropH,
-            mean: swapperMetadata.mean,
-            std: swapperMetadata.std,
-            isBGR: swapperMetadata.isBGR
+        // 9. Explode interleaved sub-frames back into full boost resolution
+        let swappedCrop = PixelBoost.explode(
+            subFrames: swappedSubFrames,
+            total: total,
+            boostWidth: boostW,
+            boostHeight: boostH,
+            modelWidth: cropW,
+            modelHeight: cropH
         )
 
-        let finalMask = FaceMask.combineMinimum(masks.isEmpty ? [FaceMask(width: cropW, height: cropH, initialValue: 1.0)] : masks)
+        // 10. Generate combined mask matching active types (box, occlusion, region, area)
+        let finalMask = try await ProcessorMasks.createCombinedMask(
+            cropBuffer: cropBuffer,
+            targetFace: targetFace,
+            affineMatrix: affineMatrix,
+            maskSettings: maskSettings,
+            modelCache: modelCache,
+            ortBridge: ortBridge
+        )
+
+        // 11. Paste back into target buffer
         let resultImage = targetImage.clone()
         resultImage.pasteBack(crop: swappedCrop, mask: finalMask, matrix: affineMatrix)
 

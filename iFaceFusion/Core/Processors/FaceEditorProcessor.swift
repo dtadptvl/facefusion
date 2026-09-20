@@ -137,12 +137,13 @@ public final class FaceEditorProcessor: Sendable {
                 "input": TensorBuffer(floatData: eyeInput, shape: [1, 66])
             ])
 
-            if let eyeDelta = eyeOutputs.values.first?.floatData {
-                let absRatio = abs(settings.eyeOpenRatio)
-                for i in 0..<21 {
-                    for j in 0..<3 {
-                        sourceMotionPts[i][j] += eyeDelta[i * 3 + j] * absRatio
-                    }
+            guard let eyeDelta = (eyeOutputs["output"] ?? eyeOutputs.values.first)?.floatData, eyeDelta.count >= 63 else {
+                throw ORTBridgeError.inferenceFailed("LivePortrait eye retargeter output invalid: expected at least 63 elements")
+            }
+            let absRatio = abs(settings.eyeOpenRatio)
+            for i in 0..<21 {
+                for j in 0..<3 {
+                    sourceMotionPts[i][j] += eyeDelta[i * 3 + j] * absRatio
                 }
             }
         }
@@ -159,12 +160,13 @@ public final class FaceEditorProcessor: Sendable {
                 "input": TensorBuffer(floatData: lipInput, shape: [1, 65])
             ])
 
-            if let lipDelta = lipOutputs.values.first?.floatData {
-                let absRatio = abs(settings.lipOpenRatio)
-                for i in 0..<21 {
-                    for j in 0..<3 {
-                        sourceMotionPts[i][j] += lipDelta[i * 3 + j] * absRatio
-                    }
+            guard let lipDelta = (lipOutputs["output"] ?? lipOutputs.values.first)?.floatData, lipDelta.count >= 63 else {
+                throw ORTBridgeError.inferenceFailed("LivePortrait lip retargeter output invalid: expected at least 63 elements")
+            }
+            let absRatio = abs(settings.lipOpenRatio)
+            for i in 0..<21 {
+                for j in 0..<3 {
+                    sourceMotionPts[i][j] += lipDelta[i * 3 + j] * absRatio
                 }
             }
         }
@@ -178,8 +180,8 @@ public final class FaceEditorProcessor: Sendable {
             "target": TensorBuffer(floatData: flatTarget, shape: [1, 21, 3])
         ])
 
-        guard let stitchedPoints = (stitchOutputs["output"] ?? (stitchOutputs.count == 1 ? stitchOutputs.values.first : nil))?.floatData else {
-            throw ORTBridgeError.inferenceFailed("LivePortrait stitcher produced empty tensor")
+        guard let stitchedPoints = (stitchOutputs["output"] ?? (stitchOutputs.count == 1 ? stitchOutputs.values.first : nil))?.floatData, stitchedPoints.count >= 63 else {
+            throw ORTBridgeError.inferenceFailed("LivePortrait stitcher produced invalid tensor: expected at least 63 elements")
         }
 
         // 8. Generator forward pass
@@ -189,8 +191,8 @@ public final class FaceEditorProcessor: Sendable {
             "target": TensorBuffer(floatData: flatTarget, shape: [1, 21, 3])
         ])
 
-        guard let genTensor = (genOutputs["output"] ?? (genOutputs.count == 1 ? genOutputs.values.first : nil))?.floatData else {
-            throw ORTBridgeError.inferenceFailed("LivePortrait generator produced empty tensor")
+        guard let genTensor = (genOutputs["output"] ?? (genOutputs.count == 1 ? genOutputs.values.first : nil))?.floatData, genTensor.count == cropSize * cropSize * 3 else {
+            throw ORTBridgeError.inferenceFailed("LivePortrait generator produced invalid tensor: expected \(cropSize * cropSize * 3) elements")
         }
 
         let editedCrop = ImageBuffer.fromFloatTensorNCHW(
@@ -202,9 +204,16 @@ public final class FaceEditorProcessor: Sendable {
             isBGR: false
         )
 
-        let boxMask = FaceMask.createBoxMask(width: cropSize, height: cropSize, blur: maskSettings.blur, padding: maskSettings.padding)
+        let finalMask = try await ProcessorMasks.createCombinedMask(
+            cropBuffer: cropBuffer,
+            targetFace: targetFace,
+            affineMatrix: affineMatrix,
+            maskSettings: maskSettings,
+            modelCache: modelCache,
+            ortBridge: ortBridge
+        )
         let resultImage = targetImage.clone()
-        resultImage.pasteBack(crop: editedCrop, mask: boxMask, matrix: affineMatrix)
+        resultImage.pasteBack(crop: editedCrop, mask: finalMask, matrix: affineMatrix)
 
         return resultImage
     }

@@ -111,14 +111,14 @@ public actor ProcessingEngine {
 
             switch kind {
             case .faceSwapper:
-                guard let sBuf = sourceBuffer, let sFace = sourceFace, let tFace = targetFace else {
+                guard let sBuf = sourceBuffer, let sFace = sourceFace else {
                     throw ProcessingEngineError.executionFailed("Face Swapper missing source or target face")
                 }
                 currentBuffer = try await faceSwapper.process(
                     sourceImage: sBuf,
                     sourceFace: sFace,
                     targetImage: currentBuffer,
-                    targetFace: tFace,
+                    targetFace: targetFace,
                     settings: settings.faceSwapper,
                     maskSettings: settings.mask,
                     modelCache: modelCache,

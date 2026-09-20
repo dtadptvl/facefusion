@@ -147,8 +147,8 @@ public final class ExpressionRestorerProcessor: Sendable {
             "target": TensorBuffer(floatData: flatTempPts, shape: [1, 21, 3])
         ]
         let genOutputs = try await ortBridge.run(modelPath: genURL.path, inputs: genInputs)
-        guard let genTensor = (genOutputs["output"] ?? (genOutputs.count == 1 ? genOutputs.values.first : nil))?.floatData else {
-            throw ORTBridgeError.inferenceFailed("LivePortrait generator returned empty tensor")
+        guard let genTensor = (genOutputs["output"] ?? (genOutputs.count == 1 ? genOutputs.values.first : nil))?.floatData, genTensor.count == cropSize * cropSize * 3 else {
+            throw ORTBridgeError.inferenceFailed("LivePortrait generator returned invalid tensor: expected \(cropSize * cropSize * 3) elements")
         }
 
         let restoredCrop = ImageBuffer.fromFloatTensorNCHW(
@@ -160,9 +160,16 @@ public final class ExpressionRestorerProcessor: Sendable {
             isBGR: false
         )
 
-        let boxMask = FaceMask.createBoxMask(width: cropSize, height: cropSize, blur: maskSettings.blur, padding: maskSettings.padding)
+        let finalMask = try await ProcessorMasks.createCombinedMask(
+            cropBuffer: tempCrop,
+            targetFace: targetFace,
+            affineMatrix: tempAffineMatrix,
+            maskSettings: maskSettings,
+            modelCache: modelCache,
+            ortBridge: ortBridge
+        )
         let resultImage = targetImage.clone()
-        resultImage.pasteBack(crop: restoredCrop, mask: boxMask, matrix: tempAffineMatrix)
+        resultImage.pasteBack(crop: restoredCrop, mask: finalMask, matrix: tempAffineMatrix)
 
         return resultImage
     }

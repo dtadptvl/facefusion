@@ -346,4 +346,101 @@ final class iFaceFusionTests: XCTestCase {
 
         XCTAssertGreaterThan(totalPixels, maxPixelBudget, "4x upscale of 48MP image produces 768MP which exceeds 64MP budget")
     }
+
+    // MARK: - Pixel Boost & Processor Masks Contracts
+
+    func testPixelBoostInterleavingRoundtrip() {
+        let boostW = 512
+        let boostH = 512
+        let modelW = 256
+        let modelH = 256
+        let total = 2
+
+        var orig = ImageBuffer(width: boostW, height: boostH)
+        for i in 0..<(boostW * boostH * 4) {
+            orig.data[i] = UInt8((i * 37 + 13) % 256)
+        }
+
+        let subFrames = PixelBoost.implode(crop: orig, total: total, modelWidth: modelW, modelHeight: modelH)
+        XCTAssertEqual(subFrames.count, total * total)
+        for sub in subFrames {
+            XCTAssertEqual(sub.width, modelW)
+            XCTAssertEqual(sub.height, modelH)
+        }
+
+        let exploded = PixelBoost.explode(
+            subFrames: subFrames,
+            total: total,
+            boostWidth: boostW,
+            boostHeight: boostH,
+            modelWidth: modelW,
+            modelHeight: modelH
+        )
+
+        XCTAssertEqual(exploded.width, boostW)
+        XCTAssertEqual(exploded.height, boostH)
+        XCTAssertEqual(exploded.data, orig.data, "PixelBoost explode(implode(image)) must be an exact lossless bijection")
+    }
+
+    func testPixelBoost4xRoundtrip() {
+        let boostW = 1024
+        let boostH = 1024
+        let modelW = 256
+        let modelH = 256
+        let total = 4
+
+        var orig = ImageBuffer(width: boostW, height: boostH)
+        for i in 0..<(boostW * boostH * 4) {
+            orig.data[i] = UInt8((i * 17 + 5) % 256)
+        }
+
+        let subFrames = PixelBoost.implode(crop: orig, total: total, modelWidth: modelW, modelHeight: modelH)
+        XCTAssertEqual(subFrames.count, 16)
+
+        let exploded = PixelBoost.explode(
+            subFrames: subFrames,
+            total: total,
+            boostWidth: boostW,
+            boostHeight: boostH,
+            modelWidth: modelW,
+            modelHeight: modelH
+        )
+
+        XCTAssertEqual(exploded.data, orig.data, "1024x1024 4x PixelBoost roundtrip must be perfectly bijective")
+    }
+
+    func testProcessorMasksFeatheringFormula() {
+        // Mask with values spanning [0, 1]
+        let mask = FaceMask(width: 4, height: 4, values: [
+            0.0, 0.2, 0.4, 0.5,
+            0.55, 0.6, 0.75, 0.8,
+            0.85, 0.9, 0.95, 1.0,
+            1.0, 1.0, 1.0, 1.0
+        ])
+        let feathered = ProcessorMasks.featherMask(mask, sigma: 0.0)
+        XCTAssertEqual(feathered.width, 4)
+        XCTAssertEqual(feathered.height, 4)
+
+        // When sigma = 0, gaussianBlurred returns copy of values
+        // Formula: (clip(0.5, 1.0) - 0.5) * 2.0
+        // value 0.0 -> clip to 0.5 -> (0.5 - 0.5) * 2 = 0.0
+        // value 0.4 -> clip to 0.5 -> (0.5 - 0.5) * 2 = 0.0
+        // value 0.5 -> clip to 0.5 -> (0.5 - 0.5) * 2 = 0.0
+        // value 0.75 -> clip to 0.75 -> (0.75 - 0.5) * 2 = 0.5
+        // value 1.0 -> clip to 1.0 -> (1.0 - 0.5) * 2 = 1.0
+        XCTAssertEqual(feathered.values[0], 0.0, accuracy: 1e-5)
+        XCTAssertEqual(feathered.values[2], 0.0, accuracy: 1e-5)
+        XCTAssertEqual(feathered.values[3], 0.0, accuracy: 1e-5)
+        XCTAssertEqual(feathered.values[6], 0.5, accuracy: 1e-5)
+        XCTAssertEqual(feathered.values[11], 1.0, accuracy: 1e-5)
+    }
+
+    func testFaceMaskNonSquareResizing() {
+        // Verify non-square resizing doesn't crash or index out of bounds after y0 clamping fix
+        let mask = FaceMask(width: 100, height: 200, initialValue: 1.0)
+        let resized = mask.resized(toWidth: 50, toHeight: 300)
+        XCTAssertEqual(resized.width, 50)
+        XCTAssertEqual(resized.height, 300)
+        XCTAssertEqual(resized.values[0], 1.0)
+    }
 }

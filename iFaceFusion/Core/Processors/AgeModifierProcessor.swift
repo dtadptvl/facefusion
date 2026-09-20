@@ -53,9 +53,16 @@ public final class AgeModifierProcessor: Sendable {
             isBGR: metadata.isBGR
         )
 
-        let boxMask = FaceMask.createBoxMask(width: cropW, height: cropH, blur: maskSettings.blur, padding: maskSettings.padding)
+        let finalMask = try await ProcessorMasks.createCombinedMask(
+            cropBuffer: cropBuffer,
+            targetFace: targetFace,
+            affineMatrix: affineMatrix,
+            maskSettings: maskSettings,
+            modelCache: modelCache,
+            ortBridge: ortBridge
+        )
         let resultImage = targetImage.clone()
-        resultImage.pasteBack(crop: modifiedCrop, mask: boxMask, matrix: affineMatrix)
+        resultImage.pasteBack(crop: modifiedCrop, mask: finalMask, matrix: affineMatrix)
 
         return resultImage
     }

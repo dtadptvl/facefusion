@@ -83,10 +83,17 @@ public final class DeepSwapperProcessor: Sendable {
             // Feather with sigma 6.25 matching upstream prepare_crop_mask
             let blurredDFLMask = combinedDFLMask.gaussianBlurred(sigma: 6.25)
             masks.append(blurredDFLMask)
-        } else {
-            let boxMask = FaceMask.createBoxMask(width: cropW, height: cropH, blur: maskSettings.blur, padding: maskSettings.padding)
-            masks.append(boxMask)
         }
+
+        let userMask = try await ProcessorMasks.createCombinedMask(
+            cropBuffer: cropBuffer,
+            targetFace: targetFace,
+            affineMatrix: affineMatrix,
+            maskSettings: maskSettings,
+            modelCache: ModelCache.shared,
+            ortBridge: ortBridge
+        )
+        masks.append(userMask)
 
         let finalMask = FaceMask.combineMinimum(masks)
         let resultImage = targetImage.clone()

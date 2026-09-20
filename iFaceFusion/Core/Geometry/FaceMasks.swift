@@ -226,7 +226,7 @@ public struct FaceMask: Sendable {
 
         for ty in 0..<targetH {
             let srcY = (Float(ty) + 0.5) * scaleY - 0.5
-            let y0 = max(0, min(width - 1, Int(floor(srcY))))
+            let y0 = max(0, min(height - 1, Int(floor(srcY))))
             let y1 = max(0, min(height - 1, y0 + 1))
             let fy = srcY - Float(y0)
 
