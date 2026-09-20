@@ -49,7 +49,7 @@ public final class ImageBuffer: @unchecked Sendable {
         }
     }
 
-    /// Initializes from a CGImage.
+    /// Initializes from a CGImage, safely drawing within a bounded pointer scope and unpremultiplying to straight RGBA.
     public convenience init?(cgImage: CGImage) {
         let width = cgImage.width
         let height = cgImage.height
@@ -57,25 +57,81 @@ public final class ImageBuffer: @unchecked Sendable {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
 
-        guard let context = CGContext(
-            data: &data,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo.rawValue
-        ) else { return nil }
+        let drawn = data.withUnsafeMutableBytes { ptr -> Bool in
+            guard let baseAddress = ptr.baseAddress else { return false }
+            guard let context = CGContext(
+                data: baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo.rawValue
+            ) else { return false }
 
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+
+        guard drawn else { return nil }
+
+        // Unpremultiply imported pixels to guarantee consistent straight RGBA internally
+        for i in 0..<(width * height) {
+            let idx = i * 4
+            let a = UInt32(data[idx + 3])
+            if a == 0 {
+                data[idx + 0] = 0
+                data[idx + 1] = 0
+                data[idx + 2] = 0
+            } else if a < 255 {
+                let r = (UInt32(data[idx + 0]) * 255 + a / 2) / a
+                let g = (UInt32(data[idx + 1]) * 255 + a / 2) / a
+                let b = (UInt32(data[idx + 2]) * 255 + a / 2) / a
+                data[idx + 0] = UInt8(min(r, 255))
+                data[idx + 1] = UInt8(min(g, 255))
+                data[idx + 2] = UInt8(min(b, 255))
+            }
+        }
+
         self.init(width: width, height: height, data: data)
     }
 
-    /// Renders the pixel buffer to a CGImage.
+    /// Renders the straight RGBA pixel buffer to a CGImage, using straight .last when supported or a premultiplied copy.
     public func toCGImage() -> CGImage? {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
         guard let provider = CGDataProvider(data: Data(data) as CFData) else { return nil }
+
+        // Attempt export as straight RGBA (.last)
+        let straightInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+        if let straightCG = CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: straightInfo,
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: true,
+            intent: .defaultIntent
+        ) {
+            return straightCG
+        }
+
+        // ponytail: Fallback premultiplied copy used if CGImage provider rejects straight .last on legacy/hardware configurations. Upgrade to direct vImage unpremultiplied surface if pipeline latency demands zero-copy export.
+        var premulData = [UInt8](repeating: 0, count: width * height * 4)
+        for i in 0..<(width * height) {
+            let idx = i * 4
+            let a = UInt32(data[idx + 3])
+            premulData[idx + 0] = UInt8((UInt32(data[idx + 0]) * a + 127) / 255)
+            premulData[idx + 1] = UInt8((UInt32(data[idx + 1]) * a + 127) / 255)
+            premulData[idx + 2] = UInt8((UInt32(data[idx + 2]) * a + 127) / 255)
+            premulData[idx + 3] = data[idx + 3]
+        }
+
+        guard let premulProvider = CGDataProvider(data: Data(premulData) as CFData) else { return nil }
+        let premulInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
         return CGImage(
             width: width,
             height: height,
@@ -83,8 +139,8 @@ public final class ImageBuffer: @unchecked Sendable {
             bitsPerPixel: 32,
             bytesPerRow: width * 4,
             space: colorSpace,
-            bitmapInfo: bitmapInfo,
-            provider: provider,
+            bitmapInfo: premulInfo,
+            provider: premulProvider,
             decode: nil,
             shouldInterpolate: true,
             intent: .defaultIntent

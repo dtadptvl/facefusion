@@ -44,16 +44,18 @@ public final class BackgroundRemoverProcessor: Sendable {
         // 4. Apply despill color if configured
         var result = targetImage.clone()
         if settings.despillColor[3] > 0 {
-            applyDespillColor(to: &result, despillRGBA: settings.despillColor)
+            Self.applyDespillColor(to: &result, despillRGBA: settings.despillColor)
         }
 
         // 5. Composite foreground with fill color using alpha matte
-        applyFillColor(to: &result, mask: fullMask, fillRGBA: settings.fillColor)
+        Self.applyFillColor(to: &result, mask: fullMask, fillRGBA: settings.fillColor)
 
         return result
     }
 
-    private func applyFillColor(to image: inout ImageBuffer, mask: FaceMask, fillRGBA: [UInt8]) {
+    // ponytail: Porter-Duff Over composite uses software scalar loops. Upgrade to vImage AlphaBlend / Accelerate if 4K background replacement needs 60fps throughput.
+    /// Composites target image over fill color using straight-alpha "over" blending, preserving original alpha.
+    public static func applyFillColor(to image: inout ImageBuffer, mask: FaceMask, fillRGBA: [UInt8]) {
         let fillAlpha = Float(fillRGBA[3]) / 255.0
         let fillR = Float(fillRGBA[0])
         let fillG = Float(fillRGBA[1])
@@ -63,42 +65,84 @@ public final class BackgroundRemoverProcessor: Sendable {
             let rowOffset = y * image.width * 4
             for x in 0..<image.width {
                 let idx = rowOffset + x * 4
-                let fgAlpha = mask[x, y] // 1.0 = foreground, 0.0 = background
-                let bgWeight = (1.0 - fgAlpha) * fillAlpha
+                let origAlpha = Float(image.data[idx + 3]) / 255.0
+                let matte = mask[x, y] // 1.0 = foreground, 0.0 = background
+
+                // Effective foreground alpha: original alpha multiplied by matte
+                let fgAlpha = origAlpha * matte
+                let bgAlpha = fillAlpha
+
+                // Porter-Duff Over: foreground over background
+                let bgWeight = bgAlpha * (1.0 - fgAlpha)
+                let alphaOut = fgAlpha + bgWeight
 
                 let origR = Float(image.data[idx + 0])
                 let origG = Float(image.data[idx + 1])
                 let origB = Float(image.data[idx + 2])
 
-                let blendedR = origR * (1.0 - bgWeight) + fillR * bgWeight
-                let blendedG = origG * (1.0 - bgWeight) + fillG * bgWeight
-                let blendedB = origB * (1.0 - bgWeight) + fillB * bgWeight
-                let alphaOut = fillRGBA[3] == 0 ? UInt8(min(max(fgAlpha * 255.0, 0), 255)) : 255
+                if alphaOut > 1e-6 {
+                    let blendedR = (origR * fgAlpha + fillR * bgWeight) / alphaOut
+                    let blendedG = (origG * fgAlpha + fillG * bgWeight) / alphaOut
+                    let blendedB = (origB * fgAlpha + fillB * bgWeight) / alphaOut
 
-                image.data[idx + 0] = UInt8(min(max(blendedR, 0), 255))
-                image.data[idx + 1] = UInt8(min(max(blendedG, 0), 255))
-                image.data[idx + 2] = UInt8(min(max(blendedB, 0), 255))
-                image.data[idx + 3] = alphaOut
+                    image.data[idx + 0] = UInt8(min(max(blendedR.rounded(), 0), 255))
+                    image.data[idx + 1] = UInt8(min(max(blendedG.rounded(), 0), 255))
+                    image.data[idx + 2] = UInt8(min(max(blendedB.rounded(), 0), 255))
+                    image.data[idx + 3] = UInt8(min(max((alphaOut * 255.0).rounded(), 0), 255))
+                } else {
+                    image.data[idx + 0] = 0
+                    image.data[idx + 1] = 0
+                    image.data[idx + 2] = 0
+                    image.data[idx + 3] = 0
+                }
             }
         }
     }
 
-    private func applyDespillColor(to image: inout ImageBuffer, despillRGBA: [UInt8]) {
-        let alpha = Float(despillRGBA[3]) / 255.0
-        guard alpha > 0 else { return }
+    /// Suppresses color spill for arbitrary key channels (green, blue, red) using dominant-channel removal.
+    public static func applyDespillColor(to image: inout ImageBuffer, despillRGBA: [UInt8]) {
+        let strength = Float(despillRGBA[3]) / 255.0
+        guard strength > 0 else { return }
 
-        let targetG = Float(despillRGBA[1])
+        let dR = Float(despillRGBA[0])
+        let dG = Float(despillRGBA[1])
+        let dB = Float(despillRGBA[2])
+
+        enum DominantKey { case red, green, blue }
+        let key: DominantKey
+        if dG >= dR && dG >= dB {
+            key = .green
+        } else if dB >= dR && dB >= dG {
+            key = .blue
+        } else {
+            key = .red
+        }
+
         for i in 0..<(image.width * image.height) {
             let idx = i * 4
             let r = Float(image.data[idx + 0])
             let g = Float(image.data[idx + 1])
             let b = Float(image.data[idx + 2])
 
-            // If green spill is detected (g > max(r, b))
-            let maxRB = max(r, b)
-            if g > maxRB && targetG > 128 {
-                let despilledG = g + (maxRB - g) * alpha
-                image.data[idx + 1] = UInt8(min(max(despilledG, 0), 255))
+            switch key {
+            case .green:
+                let limit = max(r, b)
+                if g > limit {
+                    let despilled = g * (1.0 - strength) + limit * strength
+                    image.data[idx + 1] = UInt8(min(max(despilled.rounded(), 0), 255))
+                }
+            case .blue:
+                let limit = max(r, g)
+                if b > limit {
+                    let despilled = b * (1.0 - strength) + limit * strength
+                    image.data[idx + 2] = UInt8(min(max(despilled.rounded(), 0), 255))
+                }
+            case .red:
+                let limit = max(g, b)
+                if r > limit {
+                    let despilled = r * (1.0 - strength) + limit * strength
+                    image.data[idx + 0] = UInt8(min(max(despilled.rounded(), 0), 255))
+                }
             }
         }
     }
