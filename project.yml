@@ -49,6 +49,7 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: tests/iFaceFusionTests.swift
+      - path: tests/ModelInferenceTests.swift
     dependencies:
       - target: iFaceFusion
     settings:

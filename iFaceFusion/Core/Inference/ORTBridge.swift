@@ -114,6 +114,14 @@ public actor ORTBridge {
         self.currentUseCoreML = nil
     }
 
+    /// Queries the model's actual ordered input and output tensor names from the session metadata.
+    public func describeNames(modelPath: String, useCoreML: Bool = true) throws -> (inputs: [String], outputs: [String]) {
+        let session = try getOrCreateSession(modelPath: modelPath, useCoreML: useCoreML)
+        let inputs = try session.inputNames()
+        let outputs = try session.outputNames()
+        return (inputs: inputs, outputs: outputs)
+    }
+
     /// Prepares or reuses an ORTSession for the model at modelPath.
     private func getOrCreateSession(modelPath: String, useCoreML: Bool = true) throws -> ORTSession {
         if let current = activeSession, currentModelPath == modelPath, currentUseCoreML == useCoreML {

@@ -19,14 +19,24 @@ public final class DeepSwapperProcessor: Sendable {
             throw ORTBridgeError.sessionCreationFailed("DFM model file does not exist at path: \(modelURL.path)")
         }
 
-        // ponytail: Dynamic resolution inferred from model filename (_224/_320/_384) or settings.inputSize. Upgrade to ORT session metadata query when binding exposes tensor shapes.
-        var resolvedDim = settings.inputSize ?? 224
-        let filename = modelURL.lastPathComponent
-        if let regex = try? NSRegularExpression(pattern: "_(\\d+)(?:\\.[a-zA-Z0-9]+)?$", options: .caseInsensitive),
-           let match = regex.firstMatch(in: filename, range: NSRange(location: 0, length: filename.utf16.count)),
-           let range = Range(match.range(at: 1), in: filename),
-           let parsedDim = Int(filename[range]) {
-            resolvedDim = parsedDim
+        // Invariant: settings.inputSize explicitly overrides filename dimension; validate bounded range 128...1024
+        var resolvedDim: Int
+        if let explicitSize = settings.inputSize {
+            resolvedDim = explicitSize
+        } else {
+            let filename = modelURL.lastPathComponent
+            if let regex = try? NSRegularExpression(pattern: "_(\\d+)(?:\\.[a-zA-Z0-9]+)?$", options: .caseInsensitive),
+               let match = regex.firstMatch(in: filename, range: NSRange(location: 0, length: filename.utf16.count)),
+               let range = Range(match.range(at: 1), in: filename),
+               let parsedDim = Int(filename[range]) {
+                resolvedDim = parsedDim
+            } else {
+                resolvedDim = 224
+            }
+        }
+
+        guard (128...1024).contains(resolvedDim) else {
+            throw ORTBridgeError.invalidInput("Deep swapper input dimension \(resolvedDim) is outside supported range 128...1024")
         }
 
         let cropW = resolvedDim
@@ -51,16 +61,45 @@ public final class DeepSwapperProcessor: Sendable {
         let nhwcBGR = sharpenedCrop.toFloatTensorNHWC(isBGR: true)
         let morphNorm = Float(settings.morph) / 100.0
 
+        // Invariant: Native ORT API session.inputNames/outputNames exposes order; describeNames avoids guessed output names
+        let (inputNames, outputNames) = try await ortBridge.describeNames(modelPath: modelURL.path)
+        guard !inputNames.isEmpty, !outputNames.isEmpty else {
+            throw ORTBridgeError.sessionCreationFailed("DFM model has empty input or output tensor names at path: \(modelURL.path)")
+        }
+
+        let faceInputName = inputNames.first(where: {
+            let lower = $0.lowercased()
+            return lower.contains("face") || lower.contains("frame") || lower.contains("input")
+        }) ?? inputNames[0]
+
         var inputs: [String: TensorBuffer] = [
-            "in_face:0": TensorBuffer(floatData: nhwcBGR, shape: [1, cropH, cropW, 3])
+            faceInputName: TensorBuffer(floatData: nhwcBGR, shape: [1, cropH, cropW, 3])
         ]
-        inputs["morph_value:0"] = TensorBuffer(floatData: [morphNorm], shape: [1])
+
+        // Invariant: Morph input is optional; omit if absent from model input metadata
+        if let morphInputName = inputNames.first(where: { $0.lowercased().contains("morph") }) {
+            inputs[morphInputName] = TensorBuffer(floatData: [morphNorm], shape: [1])
+        }
 
         let outputs = try await ortBridge.run(modelPath: modelURL.path, inputs: inputs)
 
-        // DFL outputs: crop_target_mask (0), crop_vision_frame (1), crop_source_mask (2); strictly require named frame output
-        guard let outputFrameTensor = outputs["crop_vision_frame:0"]?.floatData ?? outputs["crop_vision_frame"]?.floatData ?? outputs["output"]?.floatData else {
-            throw ORTBridgeError.inferenceFailed("Deep swapper missing expected named output 'crop_vision_frame:0' or 'crop_vision_frame'")
+        // Invariant: Output order resolved from actual model metadata, not invented names.
+        // DFL output order: [0: target_mask, 1: crop_vision_frame, 2: source_mask] or [0: crop_vision_frame].
+        let frameOutputName: String
+        if let named = outputNames.first(where: {
+            let lower = $0.lowercased()
+            return lower.contains("crop_vision_frame") || lower.contains("vision_frame") || lower.contains("frame")
+        }) {
+            frameOutputName = named
+        } else if outputNames.count >= 3 {
+            frameOutputName = outputNames[1]
+        } else {
+            frameOutputName = outputNames[0]
+        }
+
+        guard let outputFrameTensor = outputs[frameOutputName]?.floatData,
+              outputFrameTensor.count >= cropW * cropH * 3 else {
+            throw ORTBridgeError.inferenceFailed("Deep swapper missing expected frame output '\(frameOutputName)' (crop_vision_frame) or invalid length (got \(outputs[frameOutputName]?.floatData?.count ?? 0), expected >= \(cropW * cropH * 3))")
         }
 
         let swappedCrop = ImageBuffer.fromFloatTensorNHWC(
@@ -70,14 +109,30 @@ public final class DeepSwapperProcessor: Sendable {
             isBGR: true
         )
 
-        // Mask processing: combine source and target DFL masks if provided
+        // Invariant: Mask processing with strict length validation for all expected masks
         var masks: [FaceMask] = []
-        let targetMaskData = outputs["crop_target_mask:0"]?.floatData ?? outputs["crop_target_mask"]?.floatData
-        let sourceMaskData = outputs["crop_source_mask:0"]?.floatData ?? outputs["crop_source_mask"]?.floatData
-        if let targetMaskData = targetMaskData,
-           let sourceMaskData = sourceMaskData {
+        let targetMaskName: String?
+        let sourceMaskName: String?
+        if outputNames.count >= 3 {
+            targetMaskName = outputNames.first(where: { $0.lowercased().contains("target") }) ?? outputNames[0]
+            sourceMaskName = outputNames.first(where: { $0.lowercased().contains("source") }) ?? outputNames[2]
+        } else {
+            targetMaskName = outputNames.first(where: { $0.lowercased().contains("target") })
+            sourceMaskName = outputNames.first(where: { $0.lowercased().contains("source") })
+        }
+
+        if let tName = targetMaskName,
+           let sName = sourceMaskName,
+           tName != frameOutputName,
+           sName != frameOutputName,
+           let targetMaskData = outputs[tName]?.floatData,
+           let sourceMaskData = outputs[sName]?.floatData {
+            let expectedMaskLength = cropW * cropH
+            guard targetMaskData.count >= expectedMaskLength && sourceMaskData.count >= expectedMaskLength else {
+                throw ORTBridgeError.invalidOutput("Deep swapper mask tensors length mismatch: target (\(targetMaskData.count)), source (\(sourceMaskData.count)), expected >= \(expectedMaskLength)")
+            }
             var combinedDFLMask = FaceMask(width: cropW, height: cropH)
-            for i in 0..<(cropW * cropH) {
+            for i in 0..<expectedMaskLength {
                 combinedDFLMask.values[i] = min(targetMaskData[i], sourceMaskData[i])
             }
             // Feather with sigma 6.25 matching upstream prepare_crop_mask

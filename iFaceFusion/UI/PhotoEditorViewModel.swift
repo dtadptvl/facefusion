@@ -287,7 +287,7 @@ public final class PhotoEditorViewModel: ObservableObject {
                 guard currentGen == self.processGeneration else { return }
                 self.isProcessing = false
                 self.progressMessage = "Cancelled"
-            } catch let peError as ProcessingEngineError where peError == .processingCancelled {
+            } catch ProcessingEngineError.processingCancelled {
                 guard currentGen == self.processGeneration else { return }
                 self.isProcessing = false
                 self.progressMessage = "Cancelled"
