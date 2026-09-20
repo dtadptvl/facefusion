@@ -196,6 +196,17 @@ final class iFaceFusionTests: XCTestCase {
         XCTAssertEqual(shifted.data[idx11 + 3], 255)
     }
 
+    func testPasteBackTranslatedCropUsesDestinationToCropMatrix() {
+        let target = ImageBuffer(width: 12, height: 10)
+        let crop = ImageBuffer(width: 2, height: 2, data: Array(repeating: [UInt8(255), 0, 0, 255], count: 4).flatMap { $0 })
+        let transform = AffineMatrix2x3(m00: 1, m01: 0, m02: -6, m10: 0, m11: 1, m12: -4)
+        target.pasteBack(crop: crop, mask: FaceMask(width: 2, height: 2, initialValue: 1), matrix: transform)
+        XCTAssertEqual(target.data[(4 * 12 + 6) * 4], 255)
+        XCTAssertEqual(target.data[(5 * 12 + 7) * 4], 255)
+        XCTAssertEqual(target.data[(3 * 12 + 6) * 4], 0)
+        XCTAssertEqual(target.data[(6 * 12 + 7) * 4], 0)
+    }
+
     // MARK: - Non-Square Orientation & Normalization
 
     func testNonSquareOrientationImageBuffer() {

@@ -137,9 +137,10 @@ public enum ImageGeometry {
         let x2 = max(0, min(targetWidth, Int(ceil(maxX))))
         let y2 = max(0, min(targetHeight, Int(ceil(maxY))))
 
-        var pasteMatrix = invMatrix
-        pasteMatrix.m02 -= Float(x1)
-        pasteMatrix.m12 -= Float(y1)
+        // Sampling maps local destination pixels back into the aligned crop.
+        var pasteMatrix = affineMatrix
+        pasteMatrix.m02 += affineMatrix.m00 * Float(x1) + affineMatrix.m01 * Float(y1)
+        pasteMatrix.m12 += affineMatrix.m10 * Float(x1) + affineMatrix.m11 * Float(y1)
 
         return ((x1, y1, x2, y2), pasteMatrix)
     }

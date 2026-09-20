@@ -238,8 +238,10 @@ public final class ImageBuffer: @unchecked Sendable {
 
                 // Sample crop coordinate from paste area
                 let cropCoord = pasteMatrix.transformPoint(SIMD2<Float>(Float(px) + 0.5, Float(py) + 0.5))
-                let cx = cropCoord.x - 0.5
-                let cy = cropCoord.y - 0.5
+                guard cropCoord.x >= 0, cropCoord.y >= 0,
+                      cropCoord.x < Float(crop.width), cropCoord.y < Float(crop.height) else { continue }
+                let cx = min(max(cropCoord.x - 0.5, 0), Float(crop.width - 1))
+                let cy = min(max(cropCoord.y - 0.5, 0), Float(crop.height - 1))
 
                 let cx0 = max(0, min(crop.width - 1, Int(floor(cx))))
                 let cy0 = max(0, min(crop.height - 1, Int(floor(cy))))
