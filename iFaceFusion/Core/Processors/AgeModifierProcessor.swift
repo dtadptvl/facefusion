@@ -13,7 +13,7 @@ public final class AgeModifierProcessor: Sendable {
         modelCache: ModelCache,
         ortBridge: ORTBridge
     ) async throws -> ImageBuffer {
-        guard let metadata = ModelCatalog.model(for: settings.model) ?? ModelCatalog.fran as ModelMetadata? else {
+        guard let metadata = ModelCatalog.model(for: settings.model) else {
             throw ORTBridgeError.sessionCreationFailed("Unknown age modifier model: \(settings.model)")
         }
 
@@ -28,7 +28,8 @@ public final class AgeModifierProcessor: Sendable {
 
         // Calculate age direction vector matching upstream FRAN contract:
         // [ base_age / 100, (base_age + direction) / 100 ] clipped to [0, 1]
-        let baseAge: Float = 25.0
+        // Use explicit sourceAge (default 35, UI-editable) or detected targetFace.age; never invent 25.0
+        let baseAge: Float = targetFace.age ?? Float(settings.sourceAge)
         let targetAge = min(max(baseAge + Float(settings.direction), 0.0), 100.0)
         let directionVector: [Float] = [baseAge / 100.0, targetAge / 100.0]
 
@@ -39,7 +40,7 @@ public final class AgeModifierProcessor: Sendable {
         ]
 
         let outputs = try await ortBridge.run(modelPath: modelURL.path, inputs: inputs)
-        guard let outputTensor = outputs.values.first?.floatData else {
+        guard let outputTensor = (outputs["output"] ?? (outputs.count == 1 ? outputs.values.first : nil))?.floatData else {
             throw ORTBridgeError.inferenceFailed("Age modifier returned empty output tensor")
         }
 

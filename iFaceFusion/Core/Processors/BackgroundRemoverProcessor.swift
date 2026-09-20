@@ -11,7 +11,7 @@ public final class BackgroundRemoverProcessor: Sendable {
         modelCache: ModelCache,
         ortBridge: ORTBridge
     ) async throws -> ImageBuffer {
-        guard let metadata = ModelCatalog.model(for: settings.model) ?? ModelCatalog.modnet as ModelMetadata? else {
+        guard let metadata = ModelCatalog.model(for: settings.model) else {
             throw ORTBridgeError.sessionCreationFailed("Unknown background remover model: \(settings.model)")
         }
 
@@ -33,7 +33,7 @@ public final class BackgroundRemoverProcessor: Sendable {
         let inputs = ["input": TensorBuffer(floatData: tensor, shape: [1, 3, modelH, modelW])]
 
         let outputs = try await ortBridge.run(modelPath: modelURL.path, inputs: inputs)
-        guard let maskTensor = outputs.values.first?.floatData else {
+        guard let maskTensor = (outputs["output"] ?? (outputs.count == 1 ? outputs.values.first : nil))?.floatData else {
             throw ORTBridgeError.inferenceFailed("Background remover returned empty output tensor")
         }
 

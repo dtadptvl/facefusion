@@ -4,6 +4,7 @@ import UIKit
 import Accelerate
 
 /// In-memory RGBA byte buffer with image geometry manipulation, color space conversion, and ONNX tensor staging.
+// ponytail: ImageBuffer is isolated in sequential engine passes; locks omitted to prevent CPU loop overhead. Upgrade to actor/Sendable value type if concurrent sharing across threads is ever required.
 public final class ImageBuffer: @unchecked Sendable {
     public let width: Int
     public let height: Int
@@ -30,10 +31,14 @@ public final class ImageBuffer: @unchecked Sendable {
             let width = cgImage.width
             let height = cgImage.height
             var bounds = CGRect(x: 0, y: 0, width: width, height: height)
-            if image.imageOrientation == .left || image.imageOrientation == .right {
+            switch image.imageOrientation {
+            case .left, .right, .leftMirrored, .rightMirrored:
                 bounds = CGRect(x: 0, y: 0, width: height, height: width)
+            default:
+                break
             }
-            UIGraphicsBeginImageContextWithOptions(bounds.size, false, image.scale)
+            // Use scale 1.0 with exact pixel bounds to prevent dimension distortion on non-square/scaled images
+            UIGraphicsBeginImageContextWithOptions(bounds.size, false, 1.0)
             image.draw(in: bounds)
             let uprightImage = UIGraphicsGetImageFromCurrentImageContext()
             UIGraphicsEndImageContext()

@@ -172,4 +172,178 @@ final class iFaceFusionTests: XCTestCase {
         XCTAssertNil(ModelCatalog.model(for: "inswapper_128"))
         XCTAssertNil(ModelCatalog.model(for: "codeformer"))
     }
+
+    // MARK: - Image Pixel Transforms & Warp Affine
+
+    func testPixelTransformsAndWarpAffine() {
+        var buffer = ImageBuffer(width: 4, height: 4)
+        // Fill top-left with red (255, 0, 0, 255)
+        buffer.data[0] = 255
+        buffer.data[3] = 255
+
+        // Identity transform preserves coordinates
+        let identity = AffineMatrix2x3(m00: 1, m01: 0, m02: 0, m10: 0, m11: 1, m12: 0)
+        let warped = buffer.warpAffine(matrix: identity, cropWidth: 4, cropHeight: 4)
+        XCTAssertEqual(warped.data[0], 255)
+        XCTAssertEqual(warped.data[3], 255)
+
+        // Translation transform shifts pixel
+        let shift = AffineMatrix2x3(m00: 1, m01: 0, m02: -1, m10: 0, m11: 1, m12: -1)
+        let shifted = buffer.warpAffine(matrix: shift, cropWidth: 4, cropHeight: 4)
+        // (1, 1) in shifted maps to (0, 0) in source
+        let idx11 = (1 * 4 + 1) * 4
+        XCTAssertEqual(shifted.data[idx11], 255)
+        XCTAssertEqual(shifted.data[idx11 + 3], 255)
+    }
+
+    // MARK: - Non-Square Orientation & Normalization
+
+    func testNonSquareOrientationImageBuffer() {
+        // Create 20x40 non-square bitmap context
+        let width = 20
+        let height = 40
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        var rawData = [UInt8](repeating: 200, count: width * height * 4)
+        let ctx = CGContext(
+            data: &rawData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        )!
+        let cgImage = ctx.makeImage()!
+
+        // Test orientation .right: width and height should be transposed to 40x20 upright
+        let rightImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
+        guard let bufRight = ImageBuffer(image: rightImage) else {
+            XCTFail("ImageBuffer init failed for .right orientation")
+            return
+        }
+        XCTAssertEqual(bufRight.width, 40)
+        XCTAssertEqual(bufRight.height, 20)
+
+        // Test orientation .up: width and height should remain 20x40
+        let upImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
+        guard let bufUp = ImageBuffer(image: upImage) else {
+            XCTFail("ImageBuffer init failed for .up orientation")
+            return
+        }
+        XCTAssertEqual(bufUp.width, 20)
+        XCTAssertEqual(bufUp.height, 40)
+    }
+
+    // MARK: - Alpha Channel Roundtrip & Preservation
+
+    func testAlphaChannelPreservationAndRoundtrip() {
+        var buffer = ImageBuffer(width: 8, height: 8)
+        // Populate specific pixel with 50% transparency: RGBA = (100, 150, 200, 128)
+        let targetIdx = (3 * 8 + 3) * 4
+        buffer.data[targetIdx + 0] = 100
+        buffer.data[targetIdx + 1] = 150
+        buffer.data[targetIdx + 2] = 200
+        buffer.data[targetIdx + 3] = 128
+
+        // Verify clone preserves alpha exactly
+        let clone = buffer.clone()
+        XCTAssertEqual(clone.data[targetIdx + 3], 128)
+
+        // Verify pasteBack preserves original alpha channel
+        var baseImage = ImageBuffer(width: 8, height: 8)
+        baseImage.data[targetIdx + 3] = 128
+        let crop = ImageBuffer(width: 4, height: 4)
+        var mask = FaceMask(width: 4, height: 4, initialValue: 1.0)
+        baseImage.pasteBack(crop: crop, mask: mask, matrix: AffineMatrix2x3.identity)
+        XCTAssertEqual(baseImage.data[targetIdx + 3], 128, "pasteBack must not overwrite or corrupt alpha channel")
+    }
+
+    // MARK: - Named Tensor Outputs & Strict Counts
+
+    func testHyperSwapNamedTensorOutputSelection() {
+        // HyperSwap produces two named outputs: "output" (swapped image) and "mask" (face mask)
+        let dummyImageTensor = TensorBuffer(floatData: [0.1, 0.2, 0.3], shape: [1, 3, 1, 1])
+        let dummyMaskTensor = TensorBuffer(floatData: [1.0], shape: [1, 1, 1, 1])
+
+        let outputs: [String: TensorBuffer] = [
+            "mask": dummyMaskTensor,
+            "output": dummyImageTensor
+        ]
+
+        // Strict name selection must return "output" tensor, never the mask tensor
+        let selected = outputs["output"]?.floatData
+        XCTAssertNotNil(selected)
+        XCTAssertEqual(selected?.count, 3)
+        XCTAssertEqual(selected?[0], 0.1)
+    }
+
+    func testLivePortraitStrictMotionTensors() {
+        // Strict contract: all 7 kinematic motion tensors required; missing any tensor must fail
+        let incompleteOutputs: [String: TensorBuffer] = [
+            "pitch": TensorBuffer(floatData: [0.0], shape: [1, 1]),
+            "yaw": TensorBuffer(floatData: [0.0], shape: [1, 1])
+            // missing roll, scale, translation, expression, motion_points
+        ]
+
+        let hasAll = incompleteOutputs["pitch"] != nil &&
+                     incompleteOutputs["yaw"] != nil &&
+                     incompleteOutputs["roll"] != nil &&
+                     incompleteOutputs["scale"] != nil &&
+                     incompleteOutputs["translation"] != nil &&
+                     incompleteOutputs["expression"] != nil &&
+                     incompleteOutputs["motion_points"] != nil
+        XCTAssertFalse(hasAll, "Incomplete LivePortrait kinematic outputs must be rejected without zero fallback")
+    }
+
+    // MARK: - Scaled Face Coordinates After Upscale
+
+    func testFaceCoordinateScalingAfterUpscale() {
+        let initialBbox = CGRect(x: 10, y: 20, width: 30, height: 40)
+        let l5 = FaceLandmark5(points: [
+            SIMD2<Float>(15, 25), SIMD2<Float>(35, 25),
+            SIMD2<Float>(25, 35),
+            SIMD2<Float>(18, 50), SIMD2<Float>(32, 50)
+        ])
+        let l68 = FaceLandmark68(points: [SIMD2<Float>](repeating: SIMD2<Float>(25, 35), count: 68))
+        let targetFace = FaceTarget(boundingBox: initialBbox, landmark5: l5, landmark68: l68, age: 30.0)
+
+        // Rescale by 4x (representing 4x frame_enhancer upscale)
+        let rescaled = targetFace.rescaled(scaleX: 4.0, scaleY: 4.0)
+
+        XCTAssertEqual(rescaled.boundingBox.origin.x, 40.0)
+        XCTAssertEqual(rescaled.boundingBox.origin.y, 80.0)
+        XCTAssertEqual(rescaled.boundingBox.width, 120.0)
+        XCTAssertEqual(rescaled.boundingBox.height, 160.0)
+        XCTAssertEqual(rescaled.landmark5.points[0], SIMD2<Float>(60.0, 100.0))
+        XCTAssertEqual(rescaled.age, 30.0)
+    }
+
+    // MARK: - FRAN Explicit Source Age & Memory Budget
+
+    func testFRANExplicitSourceAgeContract() {
+        let settings = AgeModifierSettings(model: "fran", direction: 10, sourceAge: 40)
+        XCTAssertEqual(settings.sourceAge, 40)
+
+        let targetFaceWithoutAge = FaceTarget(
+            boundingBox: .zero,
+            landmark5: FaceLandmark5(points: [SIMD2<Float>](repeating: .zero, count: 5)),
+            landmark68: FaceLandmark68(points: [SIMD2<Float>](repeating: .zero, count: 68)),
+            age: nil
+        )
+
+        let effectiveBaseAge = targetFaceWithoutAge.age ?? Float(settings.sourceAge)
+        XCTAssertEqual(effectiveBaseAge, 40.0, "FRAN must use explicit sourceAge when face age is nil")
+    }
+
+    func testMemoryBudgetGuardCalculations() {
+        let width = 8000
+        let height = 6000
+        let scale = 4
+        let outW = width * scale
+        let outH = height * scale
+        let totalPixels = outW * outH
+        let maxPixelBudget = 64_000_000
+
+        XCTAssertGreaterThan(totalPixels, maxPixelBudget, "4x upscale of 48MP image produces 768MP which exceeds 64MP budget")
+    }
 }

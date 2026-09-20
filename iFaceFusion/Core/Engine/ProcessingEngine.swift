@@ -69,35 +69,25 @@ public actor ProcessingEngine {
             throw ProcessingEngineError.invalidTargetImage("Could not decode target image pixels")
         }
 
-        var currentBuffer = targetBuffer.clone()
         let activeKinds = settings.activeProcessors.isEmpty ? [.faceSwapper] : settings.activeProcessors
 
-        // 2. Determine if any active processor requires face landmarks
-        let requiresFace = activeKinds.contains { kind in
-            switch kind {
-            case .faceSwapper, .faceEnhancer, .ageModifier, .expressionRestorer, .faceEditor, .deepSwapper, .faceDebugger:
-                return true
-            case .frameEnhancer, .frameColorizer, .backgroundRemover:
-                return false
-            }
-        }
+        // Memory optimization: avoid unnecessary duplicate allocations for high-res inputs (e.g. 48MP).
+        // Only clone targetBuffer if expressionRestorer needs a preserved referenceImage.
+        let referenceBuffer = activeKinds.contains(.expressionRestorer) ? targetBuffer.clone() : targetBuffer
+        var currentBuffer = activeKinds.contains(.expressionRestorer) ? targetBuffer : targetBuffer.clone()
 
-        var targetFace: FaceTarget? = nil
-        if requiresFace {
-            progress?(0.05, "Detecting target face landmarks...")
-            guard let cg = targetBuffer.toCGImage() else {
-                throw ProcessingEngineError.invalidTargetImage("Target CGImage conversion failed")
-            }
-            targetFace = try faceDetector.detectSingleFace(in: cg)
+        // 2. Strict face detection: exact one face required on target image even for non-face processors
+        progress?(0.05, "Detecting target face landmarks...")
+        guard let cg = targetBuffer.toCGImage() else {
+            throw ProcessingEngineError.invalidTargetImage("Target CGImage conversion failed")
         }
+        var targetFace = try faceDetector.detectSingleFace(in: cg)
+        let originalReferenceFace = targetFace // Preserved for original-expression reference geometry
 
-        // 3. Prepare source image and face if faceSwapper is active
+        // 3. Prepare source image and face if provided or if faceSwapper is active
         var sourceBuffer: ImageBuffer? = nil
         var sourceFace: FaceTarget? = nil
-        if activeKinds.contains(.faceSwapper) {
-            guard let srcImg = source else {
-                throw ProcessingEngineError.invalidSourceImage("Source image is required for Face Swapper")
-            }
+        if let srcImg = source {
             guard let srcBuf = ImageBuffer(image: srcImg) else {
                 throw ProcessingEngineError.invalidSourceImage("Could not decode source image pixels")
             }
@@ -107,6 +97,8 @@ public actor ProcessingEngine {
             progress?(0.10, "Extracting source identity face...")
             sourceBuffer = srcBuf
             sourceFace = try faceDetector.detectSingleFace(in: srcCG)
+        } else if activeKinds.contains(.faceSwapper) {
+            throw ProcessingEngineError.invalidSourceImage("Source image is required for Face Swapper")
         }
 
         // 4. Sequential execution of active processors
@@ -134,12 +126,9 @@ public actor ProcessingEngine {
                 )
 
             case .faceEnhancer:
-                guard let tFace = targetFace else {
-                    throw ProcessingEngineError.executionFailed("Face Enhancer requires detected target face")
-                }
                 currentBuffer = try await faceEnhancer.process(
                     targetImage: currentBuffer,
-                    targetFace: tFace,
+                    targetFace: targetFace,
                     settings: settings.faceEnhancer,
                     maskSettings: settings.mask,
                     modelCache: modelCache,
@@ -147,12 +136,20 @@ public actor ProcessingEngine {
                 )
 
             case .frameEnhancer:
+                let prevW = currentBuffer.width
+                let prevH = currentBuffer.height
                 currentBuffer = try await frameEnhancer.process(
                     targetImage: currentBuffer,
                     settings: settings.frameEnhancer,
                     modelCache: modelCache,
                     ortBridge: ortBridge
                 )
+                // Coordinate scaling: update target face coordinates when upscale changes image dimensions
+                if currentBuffer.width != prevW || currentBuffer.height != prevH {
+                    let scaleX = Float(currentBuffer.width) / Float(prevW)
+                    let scaleY = Float(currentBuffer.height) / Float(prevH)
+                    targetFace = targetFace.rescaled(scaleX: scaleX, scaleY: scaleY)
+                }
 
             case .frameColorizer:
                 currentBuffer = try await frameColorizer.process(
@@ -171,12 +168,9 @@ public actor ProcessingEngine {
                 )
 
             case .ageModifier:
-                guard let tFace = targetFace else {
-                    throw ProcessingEngineError.executionFailed("Age Modifier requires detected target face")
-                }
                 currentBuffer = try await ageModifier.process(
                     targetImage: currentBuffer,
-                    targetFace: tFace,
+                    targetFace: targetFace,
                     settings: settings.ageModifier,
                     maskSettings: settings.mask,
                     modelCache: modelCache,
@@ -184,13 +178,11 @@ public actor ProcessingEngine {
                 )
 
             case .expressionRestorer:
-                guard let tFace = targetFace else {
-                    throw ProcessingEngineError.executionFailed("Expression Restorer requires detected target face")
-                }
                 currentBuffer = try await expressionRestorer.process(
-                    referenceImage: targetBuffer,
+                    referenceImage: referenceBuffer,
+                    referenceFace: originalReferenceFace,
                     targetImage: currentBuffer,
-                    targetFace: tFace,
+                    targetFace: targetFace,
                     settings: settings.expressionRestorer,
                     maskSettings: settings.mask,
                     modelCache: modelCache,
@@ -198,12 +190,9 @@ public actor ProcessingEngine {
                 )
 
             case .faceEditor:
-                guard let tFace = targetFace else {
-                    throw ProcessingEngineError.executionFailed("Face Editor requires detected target face")
-                }
                 currentBuffer = try await faceEditor.process(
                     targetImage: currentBuffer,
-                    targetFace: tFace,
+                    targetFace: targetFace,
                     settings: settings.faceEditor,
                     maskSettings: settings.mask,
                     modelCache: modelCache,
@@ -211,13 +200,10 @@ public actor ProcessingEngine {
                 )
 
             case .deepSwapper:
-                guard let tFace = targetFace else {
-                    throw ProcessingEngineError.executionFailed("Deep Swapper requires detected target face")
-                }
                 let dfmURL = URL(fileURLWithPath: settings.deepSwapper.model)
                 currentBuffer = try await deepSwapper.process(
                     targetImage: currentBuffer,
-                    targetFace: tFace,
+                    targetFace: targetFace,
                     modelURL: dfmURL,
                     settings: settings.deepSwapper,
                     maskSettings: settings.mask,
@@ -225,12 +211,9 @@ public actor ProcessingEngine {
                 )
 
             case .faceDebugger:
-                guard let tFace = targetFace else {
-                    throw ProcessingEngineError.executionFailed("Face Debugger requires detected target face")
-                }
                 currentBuffer = faceDebugger.process(
                     targetImage: currentBuffer,
-                    targetFace: tFace,
+                    targetFace: targetFace,
                     settings: settings.faceDebugger,
                     maskSettings: settings.mask
                 )

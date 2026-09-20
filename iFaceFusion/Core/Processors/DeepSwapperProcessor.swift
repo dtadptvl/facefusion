@@ -19,9 +19,18 @@ public final class DeepSwapperProcessor: Sendable {
             throw ORTBridgeError.sessionCreationFailed("DFM model file does not exist at path: \(modelURL.path)")
         }
 
-        // Default DFL whole face resolution is 224x224 or 320x320
-        let cropW = 224
-        let cropH = 224
+        // ponytail: Dynamic resolution inferred from model filename (_224/_320/_384) or settings.inputSize. Upgrade to ORT session metadata query when binding exposes tensor shapes.
+        var resolvedDim = settings.inputSize ?? 224
+        let filename = modelURL.lastPathComponent
+        if let regex = try? NSRegularExpression(pattern: "_(\\d+)(?:\\.[a-zA-Z0-9]+)?$", options: .caseInsensitive),
+           let match = regex.firstMatch(in: filename, range: NSRange(location: 0, length: filename.utf16.count)),
+           let range = Range(match.range(at: 1), in: filename),
+           let parsedDim = Int(filename[range]) {
+            resolvedDim = parsedDim
+        }
+
+        let cropW = resolvedDim
+        let cropH = resolvedDim
         let template = WarpTemplate.dflWholeFace
         let targetPoints = template.targetPoints(width: Float(cropW), height: Float(cropH))
         let affineMatrix = ImageGeometry.estimateSimilarityMatrix(src: targetFace.landmark5.points, dst: targetPoints)
@@ -49,9 +58,9 @@ public final class DeepSwapperProcessor: Sendable {
 
         let outputs = try await ortBridge.run(modelPath: modelURL.path, inputs: inputs)
 
-        // DFL outputs: crop_target_mask, crop_vision_frame, crop_source_mask
-        guard let outputFrameTensor = outputs["crop_vision_frame:0"]?.floatData ?? outputs.values.first?.floatData else {
-            throw ORTBridgeError.inferenceFailed("Deep swapper returned empty output frame")
+        // DFL outputs: crop_target_mask (0), crop_vision_frame (1), crop_source_mask (2); strictly require named frame output
+        guard let outputFrameTensor = outputs["crop_vision_frame:0"]?.floatData ?? outputs["crop_vision_frame"]?.floatData ?? outputs["output"]?.floatData else {
+            throw ORTBridgeError.inferenceFailed("Deep swapper missing expected named output 'crop_vision_frame:0' or 'crop_vision_frame'")
         }
 
         let swappedCrop = ImageBuffer.fromFloatTensorNHWC(
@@ -63,8 +72,10 @@ public final class DeepSwapperProcessor: Sendable {
 
         // Mask processing: combine source and target DFL masks if provided
         var masks: [FaceMask] = []
-        if let targetMaskData = outputs["crop_target_mask:0"]?.floatData,
-           let sourceMaskData = outputs["crop_source_mask:0"]?.floatData {
+        let targetMaskData = outputs["crop_target_mask:0"]?.floatData ?? outputs["crop_target_mask"]?.floatData
+        let sourceMaskData = outputs["crop_source_mask:0"]?.floatData ?? outputs["crop_source_mask"]?.floatData
+        if let targetMaskData = targetMaskData,
+           let sourceMaskData = sourceMaskData {
             var combinedDFLMask = FaceMask(width: cropW, height: cropH)
             for i in 0..<(cropW * cropH) {
                 combinedDFLMask.values[i] = min(targetMaskData[i], sourceMaskData[i])

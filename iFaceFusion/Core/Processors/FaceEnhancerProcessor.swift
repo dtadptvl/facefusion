@@ -13,7 +13,7 @@ public final class FaceEnhancerProcessor: Sendable {
         modelCache: ModelCache,
         ortBridge: ORTBridge
     ) async throws -> ImageBuffer {
-        guard let metadata = ModelCatalog.model(for: settings.model) ?? ModelCatalog.gfpgan14 as ModelMetadata? else {
+        guard let metadata = ModelCatalog.model(for: settings.model) else {
             throw ORTBridgeError.sessionCreationFailed("Unknown face enhancer model: \(settings.model)")
         }
 
@@ -37,7 +37,7 @@ public final class FaceEnhancerProcessor: Sendable {
         }
 
         let outputs = try await ortBridge.run(modelPath: modelURL.path, inputs: inputs)
-        guard let outputTensor = outputs.values.first?.floatData else {
+        guard let outputTensor = (outputs["output"] ?? (outputs.count == 1 ? outputs.values.first : nil))?.floatData else {
             throw ORTBridgeError.inferenceFailed("Face enhancer returned empty output")
         }
 

@@ -91,10 +91,12 @@ public struct BackgroundRemoverSettings: Sendable {
 public struct AgeModifierSettings: Sendable {
     public var model: String // "fran", "styleganex_age"
     public var direction: Int // -100 ... 100 (default 0)
+    public var sourceAge: Int // Explicit manual source age (default 35, UI editable; not invented/estimated)
 
-    public init(model: String = "fran", direction: Int = 0) {
+    public init(model: String = "fran", direction: Int = 0, sourceAge: Int = 35) {
         self.model = model
         self.direction = direction
+        self.sourceAge = sourceAge
     }
 }
 
@@ -165,10 +167,12 @@ public struct FaceEditorSettings: Sendable {
 public struct DeepSwapperSettings: Sendable {
     public var model: String // e.g. "iperov/elon_musk_224" or custom path
     public var morph: Int // 0 ... 100 (default 100)
+    public var inputSize: Int? // Explicit dimension if not inferred from model name (e.g. 224, 320, 384, 448)
 
-    public init(model: String = "iperov/elon_musk_224", morph: Int = 100) {
+    public init(model: String = "iperov/elon_musk_224", morph: Int = 100, inputSize: Int? = nil) {
         self.model = model
         self.morph = morph
+        self.inputSize = inputSize
     }
 }
 

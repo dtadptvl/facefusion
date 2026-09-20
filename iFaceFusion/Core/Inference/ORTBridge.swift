@@ -1,5 +1,5 @@
 import Foundation
-import onnxruntime_objc
+import OnnxRuntimeBindings
 
 public enum ORTBridgeError: LocalizedError {
     case runtimeUnavailable

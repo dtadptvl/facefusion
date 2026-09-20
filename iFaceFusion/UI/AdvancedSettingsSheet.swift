@@ -15,7 +15,7 @@ public struct AdvancedSettingsSheet: View {
                 Section(header: Label("Face Swapper", systemImage: "person.2.swap")) {
                     Picker("Model", selection: $settings.faceSwapper.model) {
                         Text("HyperSwap 1a (256px)").tag("hyperswap_1a_256")
-                        Text("InSwapper (128px)").tag("inswapper_128")
+
                     }
                     .accessibilityLabel("Face Swapper Model")
 
@@ -42,7 +42,7 @@ public struct AdvancedSettingsSheet: View {
                 Section(header: Label("Face Enhancer", systemImage: "sparkles")) {
                     Picker("Model", selection: $settings.faceEnhancer.model) {
                         Text("GFPGAN 1.4").tag("gfpgan_1.4")
-                        Text("CodeFormer").tag("codeformer")
+
                     }
 
                     VStack(alignment: .leading, spacing: 4) {
@@ -135,6 +135,9 @@ public struct AdvancedSettingsSheet: View {
 
                 // MARK: - Age Modifier
                 Section(header: Label("Age Modifier", systemImage: "calendar")) {
+                    Stepper("Current age (manual): \(settings.ageModifier.sourceAge)", value: $settings.ageModifier.sourceAge, in: 0...100)
+                    Text("Set the target person's current age; this value is not automatically estimated.")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Picker("Model", selection: $settings.ageModifier.model) {
                         Text("FRAN (Disney Research)").tag("fran")
                     }

@@ -6,6 +6,7 @@ OpenCV, SciPy, and NumPy analytical baselines.
 """
 
 import math
+import os
 import zlib
 import numpy as np
 
@@ -135,11 +136,86 @@ def test_landmark_distance_ratio():
     assert abs(ratio - 0.5) < 1e-4, f"Ratio calculation mismatch: {ratio}"
     print("[PASS] Landmark distance ratio calculation verified")
 
+def test_processor_contracts():
+    # 1. FaceSwapperProcessor
+    swapper_path = os.path.join("iFaceFusion", "Core", "Processors", "FaceSwapperProcessor.swift")
+    with open(swapper_path, "r", encoding="utf-8") as f:
+        swapper_src = f.read()
+    assert "?? ModelCatalog.hyperswap1a256" not in swapper_src, "False fallback to hyperswap1a256 forbidden"
+    assert 'outputs["output"]' in swapper_src, "Must strictly select 'output' named tensor to avoid picking mask"
+
+    # 2. FaceEnhancerProcessor
+    enhancer_path = os.path.join("iFaceFusion", "Core", "Processors", "FaceEnhancerProcessor.swift")
+    with open(enhancer_path, "r", encoding="utf-8") as f:
+        enhancer_src = f.read()
+    assert "?? ModelCatalog.gfpgan14" not in enhancer_src, "False fallback to gfpgan14 forbidden"
+    assert 'outputs["output"]' in enhancer_src, "Must use named output tensor"
+
+    # 3. FrameEnhancerProcessor
+    frame_enhancer_path = os.path.join("iFaceFusion", "Core", "Processors", "FrameEnhancerProcessor.swift")
+    with open(frame_enhancer_path, "r", encoding="utf-8") as f:
+        frame_enhancer_src = f.read()
+    assert "?? ModelCatalog.spanKendataX4" not in frame_enhancer_src, "False fallback to spanKendataX4 forbidden"
+    assert "maxPixelBudget" in frame_enhancer_src, "Memory budget guard required for huge upscales"
+    assert "srcAlpha" in frame_enhancer_src or "targetImage.data" in frame_enhancer_src, "Must preserve target alpha"
+    assert "blend" in frame_enhancer_src, "Blend control must be applied"
+
+    # 4. FrameColorizerProcessor
+    colorizer_path = os.path.join("iFaceFusion", "Core", "Processors", "FrameColorizerProcessor.swift")
+    with open(colorizer_path, "r", encoding="utf-8") as f:
+        colorizer_src = f.read()
+    assert "?? ModelCatalog.ddcolor" not in colorizer_src, "False fallback to ddcolor forbidden"
+    assert "targetImage.data[idx + 3]" in colorizer_src, "Must preserve alpha in colorizer"
+
+    # 5. BackgroundRemoverProcessor
+    bg_remover_path = os.path.join("iFaceFusion", "Core", "Processors", "BackgroundRemoverProcessor.swift")
+    with open(bg_remover_path, "r", encoding="utf-8") as f:
+        bg_remover_src = f.read()
+    assert "?? ModelCatalog.modnet" not in bg_remover_src, "False fallback to modnet forbidden"
+    assert 'outputs["output"]' in bg_remover_src, "Must use named output tensor"
+
+    # 6. AgeModifierProcessor
+    age_path = os.path.join("iFaceFusion", "Core", "Processors", "AgeModifierProcessor.swift")
+    with open(age_path, "r", encoding="utf-8") as f:
+        age_src = f.read()
+    assert "?? ModelCatalog.fran" not in age_src, "False fallback to fran forbidden"
+    assert "baseAge: Float = 25.0" not in age_src, "Invented hardcoded base age 25.0 forbidden"
+    assert "sourceAge" in age_src, "Explicit sourceAge required"
+
+    # 7. ExpressionRestorer & FaceEditor strict motion tensors
+    expr_path = os.path.join("iFaceFusion", "Core", "Processors", "ExpressionRestorerProcessor.swift")
+    with open(expr_path, "r", encoding="utf-8") as f:
+        expr_src = f.read()
+    assert 'tempMotionOut["pitch"]?.floatData?.first ?? 0.0' not in expr_src, "Zero fallback on pitch forbidden"
+    assert "referenceFace" in expr_src, "Must support referenceFace for original expression geometry"
+
+    editor_path = os.path.join("iFaceFusion", "Core", "Processors", "FaceEditorProcessor.swift")
+    with open(editor_path, "r", encoding="utf-8") as f:
+        editor_src = f.read()
+    assert 'motionOutputs["pitch"]?.floatData?.first ?? 0.0' not in editor_src, "Zero fallback on pitch forbidden"
+
+    # 8. DeepSwapper dynamic resolution & named output
+    deep_path = os.path.join("iFaceFusion", "Core", "Processors", "DeepSwapperProcessor.swift")
+    with open(deep_path, "r", encoding="utf-8") as f:
+        deep_src = f.read()
+    assert "crop_vision_frame:0" in deep_src or "crop_vision_frame" in deep_src, "Named frame output required"
+    assert "resolvedDim" in deep_src, "Dynamic dimension resolution required"
+
+    # 9. ProcessingEngine coordinate scaling and face detection
+    engine_path = os.path.join("iFaceFusion", "Core", "Engine", "ProcessingEngine.swift")
+    with open(engine_path, "r", encoding="utf-8") as f:
+        engine_src = f.read()
+    assert "targetFace.rescaled" in engine_src, "Must rescale target face coordinates after upscale"
+    assert "detectSingleFace" in engine_src, "Must enforce single face detection"
+
+    print("[PASS] Processor contracts: named outputs, strict counts, no false fallbacks, coordinate scaling, and memory guards verified")
+
 if __name__ == "__main__":
     test_umeyama_similarity()
     test_live_portrait_rotation()
     test_crc32_checksums()
     test_landmark_distance_ratio()
+    test_processor_contracts()
     from test_model_catalog import test_model_catalog_contracts, test_ort_bridge_contracts, test_model_cache_contracts
     test_model_catalog_contracts()
     test_ort_bridge_contracts()

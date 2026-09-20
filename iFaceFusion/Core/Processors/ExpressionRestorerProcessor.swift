@@ -8,6 +8,7 @@ public final class ExpressionRestorerProcessor: Sendable {
 
     public func process(
         referenceImage: ImageBuffer,
+        referenceFace: FaceTarget? = nil,
         targetImage: ImageBuffer,
         targetFace: FaceTarget,
         settings: ExpressionRestorerSettings,
@@ -27,10 +28,24 @@ public final class ExpressionRestorerProcessor: Sendable {
         let prepareSize = 256
         let template = WarpTemplate.arcface128
         let targetPoints = template.targetPoints(width: Float(cropSize), height: Float(cropSize))
-        let affineMatrix = ImageGeometry.estimateSimilarityMatrix(src: targetFace.landmark5.points, dst: targetPoints)
 
-        let targetCrop = referenceImage.warpAffine(matrix: affineMatrix, cropWidth: cropSize, cropHeight: cropSize)
-        let tempCrop = targetImage.warpAffine(matrix: affineMatrix, cropWidth: cropSize, cropHeight: cropSize)
+        // Use original-expression reference geometry for reference image
+        let effectiveRefFace: FaceTarget
+        if let refFace = referenceFace {
+            effectiveRefFace = refFace
+        } else if referenceImage.width != targetImage.width || referenceImage.height != targetImage.height {
+            let sx = Float(referenceImage.width) / Float(targetImage.width)
+            let sy = Float(referenceImage.height) / Float(targetImage.height)
+            effectiveRefFace = targetFace.rescaled(scaleX: sx, scaleY: sy)
+        } else {
+            effectiveRefFace = targetFace
+        }
+
+        let refAffineMatrix = ImageGeometry.estimateSimilarityMatrix(src: effectiveRefFace.landmark5.points, dst: targetPoints)
+        let tempAffineMatrix = ImageGeometry.estimateSimilarityMatrix(src: targetFace.landmark5.points, dst: targetPoints)
+
+        let targetCrop = referenceImage.warpAffine(matrix: refAffineMatrix, cropWidth: cropSize, cropHeight: cropSize)
+        let tempCrop = targetImage.warpAffine(matrix: tempAffineMatrix, cropWidth: cropSize, cropHeight: cropSize)
 
         // Downscale to 256x256 for feature and motion extraction
         let downscaleMatrix = AffineMatrix2x3(m00: 0.5, m01: 0, m02: 0, m10: 0, m11: 0.5, m12: 0)
@@ -42,7 +57,7 @@ public final class ExpressionRestorerProcessor: Sendable {
         let featOutputs = try await ortBridge.run(modelPath: featURL.path, inputs: [
             "input": TensorBuffer(floatData: tempFeatTensor, shape: [1, 3, prepareSize, prepareSize])
         ])
-        guard let featVolume = featOutputs.values.first else {
+        guard let featVolume = featOutputs["feature_volume"] ?? featOutputs.values.first else {
             throw ORTBridgeError.inferenceFailed("LivePortrait feature extraction failed")
         }
 
@@ -57,12 +72,17 @@ public final class ExpressionRestorerProcessor: Sendable {
             "input": TensorBuffer(floatData: tempFeatTensor, shape: [1, 3, prepareSize, prepareSize])
         ])
 
-        // Extract pitch, yaw, roll, scale, translation, expression, motion_points
-        let pitch = tempMotionOut["pitch"]?.floatData?.first ?? 0.0
-        let yaw = tempMotionOut["yaw"]?.floatData?.first ?? 0.0
-        let roll = tempMotionOut["roll"]?.floatData?.first ?? 0.0
-        let scale = tempMotionOut["scale"]?.floatData?.first ?? 1.0
-        let transData = tempMotionOut["translation"]?.floatData ?? [0, 0, 0]
+        // Strict motion extraction: all motion tensors are required; zero fallback on missing tensors is strictly forbidden
+        guard let pitch = tempMotionOut["pitch"]?.floatData?.first,
+              let yaw = tempMotionOut["yaw"]?.floatData?.first,
+              let roll = tempMotionOut["roll"]?.floatData?.first,
+              let scale = tempMotionOut["scale"]?.floatData?.first,
+              let transData = tempMotionOut["translation"]?.floatData, transData.count >= 3,
+              let rawTemp = tempMotionOut["expression"]?.floatData, rawTemp.count >= 63,
+              let rawTarget = targetMotionOut["expression"]?.floatData, rawTarget.count >= 63,
+              let rawPts = tempMotionOut["motion_points"]?.floatData, rawPts.count >= 63 else {
+            throw ORTBridgeError.inferenceFailed("LivePortrait motion extractor missing required tensors (zero fallback forbidden)")
+        }
         let translation = SIMD3<Float>(transData[0], transData[1], transData[2])
 
         let rotation = LivePortraitGeometry.createRotation(pitch: pitch, yaw: yaw, roll: roll)
@@ -72,14 +92,12 @@ public final class ExpressionRestorerProcessor: Sendable {
         var targetExpr = [[Float]](repeating: [Float](repeating: 0, count: 3), count: 21)
         var motionPoints = [[Float]](repeating: [Float](repeating: 0, count: 3), count: 21)
 
-        if let rawTemp = tempMotionOut["expression"]?.floatData {
-            for i in 0..<21 { for j in 0..<3 { tempExpr[i][j] = rawTemp[i * 3 + j] } }
-        }
-        if let rawTarget = targetMotionOut["expression"]?.floatData {
-            for i in 0..<21 { for j in 0..<3 { targetExpr[i][j] = rawTarget[i * 3 + j] } }
-        }
-        if let rawPts = tempMotionOut["motion_points"]?.floatData {
-            for i in 0..<21 { for j in 0..<3 { motionPoints[i][j] = rawPts[i * 3 + j] } }
+        for i in 0..<21 {
+            for j in 0..<3 {
+                tempExpr[i][j] = rawTemp[i * 3 + j]
+                targetExpr[i][j] = rawTarget[i * 3 + j]
+                motionPoints[i][j] = rawPts[i * 3 + j]
+            }
         }
 
         // Restrict expression areas matching upstream logic
@@ -129,7 +147,7 @@ public final class ExpressionRestorerProcessor: Sendable {
             "target": TensorBuffer(floatData: flatTempPts, shape: [1, 21, 3])
         ]
         let genOutputs = try await ortBridge.run(modelPath: genURL.path, inputs: genInputs)
-        guard let genTensor = genOutputs.values.first?.floatData else {
+        guard let genTensor = (genOutputs["output"] ?? (genOutputs.count == 1 ? genOutputs.values.first : nil))?.floatData else {
             throw ORTBridgeError.inferenceFailed("LivePortrait generator returned empty tensor")
         }
 
@@ -144,7 +162,7 @@ public final class ExpressionRestorerProcessor: Sendable {
 
         let boxMask = FaceMask.createBoxMask(width: cropSize, height: cropSize, blur: maskSettings.blur, padding: maskSettings.padding)
         let resultImage = targetImage.clone()
-        resultImage.pasteBack(crop: restoredCrop, mask: boxMask, matrix: affineMatrix)
+        resultImage.pasteBack(crop: restoredCrop, mask: boxMask, matrix: tempAffineMatrix)
 
         return resultImage
     }

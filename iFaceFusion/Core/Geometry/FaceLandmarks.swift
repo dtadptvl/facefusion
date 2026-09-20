@@ -122,12 +122,38 @@ public struct FaceTarget: Equatable, Sendable {
     public var landmark68: FaceLandmark68
     public var angle: Int
     public var score: Float
+    public var age: Float?
 
-    public init(boundingBox: CGRect, landmark5: FaceLandmark5, landmark68: FaceLandmark68, angle: Int = 0, score: Float = 1.0) {
+    public init(boundingBox: CGRect, landmark5: FaceLandmark5, landmark68: FaceLandmark68, angle: Int = 0, score: Float = 1.0, age: Float? = nil) {
         self.boundingBox = boundingBox
         self.landmark5 = landmark5
         self.landmark68 = landmark68
         self.angle = angle
         self.score = score
+        self.age = age
+    }
+
+    /// Rescales all coordinates when the underlying image has been upscaled/downscaled.
+    public func rescaled(scaleX: Float, scaleY: Float) -> FaceTarget {
+        let newBbox = CGRect(
+            x: boundingBox.origin.x * CGFloat(scaleX),
+            y: boundingBox.origin.y * CGFloat(scaleY),
+            width: boundingBox.width * CGFloat(scaleX),
+            height: boundingBox.height * CGFloat(scaleY)
+        )
+        let newL5 = FaceLandmark5(points: landmark5.points.map { SIMD2<Float>($0.x * scaleX, $0.y * scaleY) })
+        let newL68 = FaceLandmark68(points: landmark68.points.map { SIMD2<Float>($0.x * scaleX, $0.y * scaleY) })
+        return FaceTarget(
+            boundingBox: newBbox,
+            landmark5: newL5,
+            landmark68: newL68,
+            angle: angle,
+            score: score,
+            age: age
+        )
+    }
+
+    public func rescaled(by scale: Float) -> FaceTarget {
+        rescaled(scaleX: scale, scaleY: scale)
     }
 }

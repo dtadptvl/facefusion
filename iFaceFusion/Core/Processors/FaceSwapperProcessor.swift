@@ -38,8 +38,8 @@ public final class FaceSwapperProcessor: Sendable {
             ortBridge: ortBridge
         )
 
-        // 4. Ensure swapper model is downloaded (default hyperswap_1a_256)
-        guard let swapperMetadata = ModelCatalog.model(for: settings.model) ?? ModelCatalog.hyperswap1a256 as ModelMetadata? else {
+        // 4. Ensure swapper model is downloaded (strictly reject unknown model without false fallback)
+        guard let swapperMetadata = ModelCatalog.model(for: settings.model) else {
             throw ORTBridgeError.sessionCreationFailed("Unknown swapper model: \(settings.model)")
         }
         let swapperURL = try await modelCache.ensureModelDownloaded(swapperMetadata)
@@ -80,7 +80,8 @@ public final class FaceSwapperProcessor: Sendable {
         ]
 
         let outputs = try await ortBridge.run(modelPath: swapperURL.path, inputs: inputs)
-        guard let swappedTensor = outputs.values.first?.floatData else {
+        // HyperSwap produces "output" AND "mask"; strictly use "output" name to avoid picking mask
+        guard let swappedTensor = (outputs["output"] ?? (outputs.count == 1 ? outputs.values.first : nil))?.floatData else {
             throw ORTBridgeError.inferenceFailed("Swapper returned empty output tensor")
         }
 

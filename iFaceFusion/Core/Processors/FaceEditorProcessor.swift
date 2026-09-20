@@ -54,26 +54,30 @@ public final class FaceEditorProcessor: Sendable {
             throw ORTBridgeError.inferenceFailed("LivePortrait feature volume extraction failed")
         }
 
-        // 2. Motion parameter extraction
+        // 2. Motion parameter extraction with strict tensor checking (no zero fallback on missing tensors)
         let motionOutputs = try await ortBridge.run(modelPath: motionURL.path, inputs: [
             "input": TensorBuffer(floatData: prepTensor, shape: [1, 3, prepareSize, prepareSize])
         ])
 
-        let pitch = motionOutputs["pitch"]?.floatData?.first ?? 0.0
-        let yaw = motionOutputs["yaw"]?.floatData?.first ?? 0.0
-        let roll = motionOutputs["roll"]?.floatData?.first ?? 0.0
-        let scale = motionOutputs["scale"]?.floatData?.first ?? 1.0
-        let transData = motionOutputs["translation"]?.floatData ?? [0, 0, 0]
+        guard let pitch = motionOutputs["pitch"]?.floatData?.first,
+              let yaw = motionOutputs["yaw"]?.floatData?.first,
+              let roll = motionOutputs["roll"]?.floatData?.first,
+              let scale = motionOutputs["scale"]?.floatData?.first,
+              let transData = motionOutputs["translation"]?.floatData, transData.count >= 3,
+              let rawExpr = motionOutputs["expression"]?.floatData, rawExpr.count >= 63,
+              let rawPts = motionOutputs["motion_points"]?.floatData, rawPts.count >= 63 else {
+            throw ORTBridgeError.inferenceFailed("LivePortrait motion extractor missing required tensors (zero fallback forbidden)")
+        }
         let translation = SIMD3<Float>(transData[0], transData[1], transData[2])
 
         var baseExpression = [[Float]](repeating: [Float](repeating: 0, count: 3), count: 21)
         var canonicalPoints = [[Float]](repeating: [Float](repeating: 0, count: 3), count: 21)
 
-        if let rawExpr = motionOutputs["expression"]?.floatData {
-            for i in 0..<21 { for j in 0..<3 { baseExpression[i][j] = rawExpr[i * 3 + j] } }
-        }
-        if let rawPts = motionOutputs["motion_points"]?.floatData {
-            for i in 0..<21 { for j in 0..<3 { canonicalPoints[i][j] = rawPts[i * 3 + j] } }
+        for i in 0..<21 {
+            for j in 0..<3 {
+                baseExpression[i][j] = rawExpr[i * 3 + j]
+                canonicalPoints[i][j] = rawPts[i * 3 + j]
+            }
         }
 
         // Base target motion points without editing
@@ -174,7 +178,9 @@ public final class FaceEditorProcessor: Sendable {
             "target": TensorBuffer(floatData: flatTarget, shape: [1, 21, 3])
         ])
 
-        let stitchedPoints = stitchOutputs.values.first?.floatData ?? flatSource
+        guard let stitchedPoints = (stitchOutputs["output"] ?? (stitchOutputs.count == 1 ? stitchOutputs.values.first : nil))?.floatData else {
+            throw ORTBridgeError.inferenceFailed("LivePortrait stitcher produced empty tensor")
+        }
 
         // 8. Generator forward pass
         let genOutputs = try await ortBridge.run(modelPath: genURL.path, inputs: [
@@ -183,7 +189,7 @@ public final class FaceEditorProcessor: Sendable {
             "target": TensorBuffer(floatData: flatTarget, shape: [1, 21, 3])
         ])
 
-        guard let genTensor = genOutputs.values.first?.floatData else {
+        guard let genTensor = (genOutputs["output"] ?? (genOutputs.count == 1 ? genOutputs.values.first : nil))?.floatData else {
             throw ORTBridgeError.inferenceFailed("LivePortrait generator produced empty tensor")
         }
 

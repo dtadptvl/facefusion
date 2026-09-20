@@ -83,8 +83,8 @@ def test_ort_bridge_contracts():
     with open(bridge_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Invariant: ONNX 1.24.2 mandatory import, not conditional silently unavailable
-    assert "import onnxruntime_objc" in content, "Missing mandatory import onnxruntime_objc"
+    # Invariant: ONNX mandatory import (OnnxRuntimeBindings or onnxruntime_objc), not conditional silently unavailable
+    assert ("import onnxruntime_objc" in content or "import OnnxRuntimeBindings" in content), "Missing mandatory import onnxruntime_objc / OnnxRuntimeBindings"
     assert "#if canImport(onnxruntime_objc)" not in content, "Silent conditional import forbidden"
 
     # Invariant: CoreML API must use official appendCoreMLExecutionProvider(with:)
